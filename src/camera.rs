@@ -104,11 +104,16 @@ impl SphereCamera {
     }
 
     pub fn view_matrix(&self) -> Mat4 {
-        Mat4::look_to_rh(self.position, self.forward(), Vec3::Y)
+        glam::camera::rh::view::look_to_mat4(self.position, self.forward(), Vec3::Y)
     }
 
     pub fn proj_matrix(&self) -> Mat4 {
-        Mat4::perspective_rh(self.fov_y_radians, self.aspect, self.near, self.far)
+        glam::camera::rh::proj::directx::perspective(
+            self.fov_y_radians,
+            self.aspect,
+            self.near,
+            self.far,
+        )
     }
 
     pub fn view_proj_matrix(&self) -> Mat4 {
@@ -122,5 +127,33 @@ impl SphereCamera {
         let far_point = inv_vp.project_point3(Vec3::new(ndc_x, ndc_y, 1.0));
         let dir = (far_point - near_point).normalize_or_zero();
         (self.position, dir)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The renderer relies on a right-handed, Y-up view space projected to
+    /// clip space with Y up and depth in `[0, 1]` (the wgpu convention).
+    #[test]
+    fn test_view_proj_clip_space_convention() {
+        let camera = SphereCamera::new(1600, 900);
+        let view_proj = camera.view_proj_matrix();
+
+        // The default camera looks down -Z: near plane maps to depth 0, far plane to depth 1.
+        let near_point = view_proj.project_point3(Vec3::new(0.0, 0.0, -camera.near));
+        let far_point = view_proj.project_point3(Vec3::new(0.0, 0.0, -camera.far));
+        assert!(near_point.z.abs() < 1e-4, "near depth = {}", near_point.z);
+        assert!(
+            (far_point.z - 1.0).abs() < 1e-4,
+            "far depth = {}",
+            far_point.z
+        );
+
+        // World up and world right stay up and right on screen.
+        let up_right = view_proj.project_point3(Vec3::new(1.0, 1.0, -10.0));
+        assert!(up_right.x > 0.0 && up_right.y > 0.0);
+        assert!(up_right.z > 0.0 && up_right.z < 1.0);
     }
 }

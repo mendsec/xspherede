@@ -132,9 +132,9 @@ impl XSphereRenderer {
         let width = size.width.max(1);
         let height = size.height.max(1);
 
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()))
         });
 
         let surface = instance
@@ -146,6 +146,7 @@ impl XSphereRenderer {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .expect("No compatible GPU adapter found");
@@ -158,15 +159,14 @@ impl XSphereRenderer {
         );
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("XSphereDE Device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("XSphereDE Device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
             .await
             .expect("Failed to initialize graphics device");
 
@@ -194,6 +194,7 @@ impl XSphereRenderer {
             height,
             present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -333,15 +334,15 @@ impl XSphereRenderer {
         let basic_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Basic Pipeline Layout"),
-                bind_group_layouts: &[&globals_bgl],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&globals_bgl)],
+                immediate_size: 0,
             });
 
         let window_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Window Pipeline Layout"),
-                bind_group_layouts: &[&globals_bgl, &window_bgl],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&globals_bgl), Some(&window_bgl)],
+                immediate_size: 0,
             });
 
         // 1. Spherical Grid Pipeline (SphereXP Wireframe)
@@ -351,11 +352,11 @@ impl XSphereRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_grid"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<GridVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4],
-                }],
+                })],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -374,13 +375,13 @@ impl XSphereRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Self::DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -391,7 +392,7 @@ impl XSphereRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_matrix"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<MatrixVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
@@ -399,7 +400,7 @@ impl XSphereRenderer {
                         1 => Float32x2,
                         2 => Float32x4
                     ],
-                }],
+                })],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -426,13 +427,13 @@ impl XSphereRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Self::DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -443,7 +444,7 @@ impl XSphereRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_window"),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<WindowVertex>() as wgpu::BufferAddress,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![
@@ -451,7 +452,7 @@ impl XSphereRenderer {
                         1 => Float32x2,
                         2 => Float32x3
                     ],
-                }],
+                })],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -471,13 +472,13 @@ impl XSphereRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Self::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -508,13 +509,13 @@ impl XSphereRenderer {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: Self::DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Always,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -982,8 +983,24 @@ impl XSphereRenderer {
         );
     }
 
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+    /// Renders one frame. Returns `true` when the surface must be reconfigured
+    /// before the next frame.
+    fn render(&mut self) -> bool {
+        let (output, needs_reconfigure) = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                return true;
+            }
+            // Nothing to draw to right now: skip this frame and try again on the next one.
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return false;
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                log::warn!("Surface texture acquisition failed validation; frame skipped");
+                return false;
+            }
+        };
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -999,6 +1016,7 @@ impl XSphereRenderer {
                 label: Some("XSphereDE Main Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         // Deep abyssal Matrix-green background
@@ -1021,6 +1039,7 @@ impl XSphereRenderer {
                 }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             // ================================================================
@@ -1088,8 +1107,8 @@ impl XSphereRenderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        Ok(())
+        self.queue.present(output);
+        needs_reconfigure
     }
 }
 
@@ -1389,14 +1408,9 @@ impl ApplicationHandler for XSphereApp {
             }
             WindowEvent::RedrawRequested => {
                 renderer.update();
-                match renderer.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        let size = renderer.window.inner_size();
-                        renderer.resize(size);
-                    }
-                    Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(e) => log::warn!("Surface error: {:?}", e),
+                if renderer.render() {
+                    let size = renderer.window.inner_size();
+                    renderer.resize(size);
                 }
                 renderer.window.request_redraw();
             }
