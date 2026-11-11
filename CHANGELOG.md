@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file. The format foll
 
 - README rewritten with an explicit project status, platform support table, and roadmap.
 - Minimum supported Rust version declared as 1.88.
+- Updated `glam` to 0.34 and `wgpu` to 30.
 
 ## [0.0.1]
 

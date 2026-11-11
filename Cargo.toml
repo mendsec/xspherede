@@ -20,7 +20,7 @@ env_logger = "0.11"
 glam = "0.34"
 log = "0.4"
 pollster = "0.4"
-wgpu = "24.0"
+wgpu = "30.0"
 winit = "0.30"
 
 # Hardened compilation profiles (inspired by secureblue / GrapheneOS / Hardened Gentoo)
