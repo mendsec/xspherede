@@ -1,0 +1,42 @@
+name: Bug report
+description: Something crashes, renders incorrectly, or behaves differently from the documentation.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security vulnerabilities must not be reported here. See SECURITY.md for private reporting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: XSphereDE version or commit
+      placeholder: 0.0.1, or the output of `git rev-parse --short HEAD`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and session
+      placeholder: Fedora 43 Wayland (GNOME), FreeBSD 15.0 X11, ...
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU and driver
+      placeholder: AMD RX 7600, Mesa 25.2 (Vulkan)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log output
+      description: Output of `RUST_LOG=info cargo run --release --locked`. Remove anything you consider private.
+      render: text

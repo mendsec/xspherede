@@ -64,9 +64,8 @@ impl SphereCamera {
 
     /// Moves the camera through the internal 3D space of the sphere (flying through Matrix columns).
     pub fn translate_local(&mut self, forward_delta: f32, right_delta: f32, up_delta: f32) {
-        let movement = self.forward() * forward_delta
-            + self.right() * right_delta
-            + self.up() * up_delta;
+        let movement =
+            self.forward() * forward_delta + self.right() * right_delta + self.up() * up_delta;
         self.target_position += movement;
 
         // Keep the user within the main sphere boundary (radius ~26.0)

@@ -1,0 +1,21 @@
+name: Feature request or design proposal
+description: Suggest a feature or discuss a design direction.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what is missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How you think it should work. Rough ideas are fine.
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Does this add attack surface, new dependencies, or change how trust domains behave?

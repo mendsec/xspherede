@@ -128,7 +128,11 @@ impl SphericalWindow {
     /// to prevent Matrix code streams from passing in front of the window.
     pub fn shield_cos(&self) -> f32 {
         let half_diag = 0.5 * (self.angular_width.hypot(self.angular_height));
-        let margin = if self.focused || self.hovered { 0.14 } else { 0.06 };
+        let margin = if self.focused || self.hovered {
+            0.14
+        } else {
+            0.06
+        };
         (half_diag + margin).cos()
     }
 
@@ -220,7 +224,7 @@ pub fn generate_demo_window_rgba(
 
                 // Security domain badge indicator on the left side of the title bar
                 let badge_y = y >= 9 && y + 7 < title_bar_h;
-                if badge_y && x >= 12 && x <= 74 && (x % 6 < 4) {
+                if badge_y && (12..=74).contains(&x) && (x % 6 < 4) {
                     data[idx] = dom_r;
                     data[idx + 1] = dom_g;
                     data[idx + 2] = dom_b;
@@ -266,7 +270,7 @@ pub fn generate_demo_window_rgba(
                                 b = dom_b;
                             } else {
                                 r = 55;
-                                g = if line % 4 == 0 { 250 } else { 190 };
+                                g = if line.is_multiple_of(4) { 250 } else { 190 };
                                 b = 105;
                             }
                         }
@@ -292,13 +296,19 @@ pub fn generate_demo_window_rgba(
                     let cell_y = content_y / 56;
                     let local_x = x % 56;
                     let local_y = content_y % 56;
-                    let in_icon_border = (local_x == 12 || local_x == 43 || local_y == 10 || local_y == 37)
-                        && (12..=43).contains(&local_x)
-                        && (10..=37).contains(&local_y);
+                    let in_icon_border =
+                        (local_x == 12 || local_x == 43 || local_y == 10 || local_y == 37)
+                            && (12..=43).contains(&local_x)
+                            && (10..=37).contains(&local_y);
                     let in_safe_glyph = (18..=37).contains(&local_x)
                         && (16..=31).contains(&local_y)
                         && (local_y % 5 < 3);
-                    if cell_x > 0 && cell_x < 6 && cell_y > 0 && cell_y < 4 && (in_icon_border || in_safe_glyph) {
+                    if cell_x > 0
+                        && cell_x < 6
+                        && cell_y > 0
+                        && cell_y < 4
+                        && (in_icon_border || in_safe_glyph)
+                    {
                         r = dom_r;
                         g = dom_g;
                         b = dom_b;
@@ -311,7 +321,10 @@ pub fn generate_demo_window_rgba(
                     let dx = x as f32 - cx;
                     let dy = y as f32 - cy;
                     let dist = (dx * dx + dy * dy).sqrt();
-                    if (dist - 35.0).abs() < 1.8 || (dist - 70.0).abs() < 1.8 || (dist - 105.0).abs() < 2.0 {
+                    if (dist - 35.0).abs() < 1.8
+                        || (dist - 70.0).abs() < 1.8
+                        || (dist - 105.0).abs() < 2.0
+                    {
                         r = dom_r;
                         g = dom_g;
                         b = dom_b;

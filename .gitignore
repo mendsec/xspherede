@@ -1,5 +1,4 @@
 /target
-Cargo.lock
 .claude/
 *security-audit*
 *vulnerability*
