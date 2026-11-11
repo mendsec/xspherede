@@ -6,7 +6,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and an experimental FreeBSD build check.
+- Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD and NetBSD.
 - Contribution guide, code of conduct, issue forms, and pull request template.
 - `Cargo.lock` is now tracked for reproducible builds.
 - Screenshot of the prototype in the README.

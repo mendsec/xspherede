@@ -65,18 +65,23 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
 
-  freebsd:
-    name: FreeBSD build check (experimental)
+  bsd:
+    name: BSD cross-check (${{ matrix.target }})
     runs-on: ubuntu-latest
-    continue-on-error: true
-    # The VM setup depends on external services; do not let an outage hold a runner for hours.
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-freebsd, x86_64-unknown-netbsd]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b # v1.6.0
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          usesh: true
-          prepare: pkg install -y rust
-          run: cargo check --locked
+          key: ${{ matrix.target }}
+      # Type-checks the whole dependency graph for the target. No linking and no execution.
+      - run: cargo check --locked --target ${{ matrix.target }}
