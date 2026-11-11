@@ -1,26 +1,26 @@
 use glam::{Mat4, Vec3};
 
-/// Mini-Mapa 3D Interativo do Globo (fiel ao SphereXP original).
-/// Mostra a própria esfera 3D vista de fora, com as janelas posicionadas em suas
-/// profundidades radiais reais dentro do volume do globo, sem aros/botões externos
-/// nem linhas artificiais de campo de visão.
+/// Interactive 3D Mini-Globe HUD (faithful to the original SphereXP).
+/// Displays the 3D sphere viewed from the outside, with windows positioned at their
+/// true radial depths inside the globe volume, free of external rings/buttons
+/// or artificial field-of-view frustum lines.
 pub struct MiniGlobeHud {
-    /// Yaw da câmera externa que observa o mini-globo
+    /// Yaw of the external camera observing the mini-globe
     pub orb_yaw: f32,
-    /// Pitch da câmera externa que observa o mini-globo
+    /// Pitch of the external camera observing the mini-globe
     pub orb_pitch: f32,
     pub target_orb_yaw: f32,
     pub target_orb_pitch: f32,
-    /// Distância da câmera externa ao centro do mini-globo
+    /// Distance from the external camera to the center of the mini-globe
     pub camera_distance: f32,
     pub sphere_radius: f32,
-    /// Indica se o cursor do mouse está atualmente sobre o Mini-Globo
+    /// Indicates whether the mouse cursor is currently hovering over the Mini-Globe
     pub is_hovered: bool,
-    /// Indica se o Mini-Globo está expandido no centro da tela (modo Overview do SphereXP)
+    /// Indicates whether the Mini-Globe is expanded at the center of the screen (SphereXP Overview mode)
     pub expanded: bool,
-    /// Progresso animado da expansão [0.0 = canto inf. direito, 1.0 = centro da tela]
+    /// Animated expansion progress `[0.0 = bottom-right corner, 1.0 = center of the screen]`
     pub expansion_anim: f32,
-    /// Progresso animado do hover no modo compacto [0.0 .. 1.0]
+    /// Animated hover progress in compact mode `[0.0 .. 1.0]`
     pub hover_anim: f32,
 }
 
@@ -44,8 +44,8 @@ impl MiniGlobeHud {
         self.expanded = !self.expanded;
     }
 
-    /// Retorna `(x, y, tamanho)` do viewport quadrado do Mini-Globo interpolando suavemente
-    /// entre o canto inferior direito e o centro da tela (quando expandido).
+    /// Returns `(x, y, size)` of the square Mini-Globe viewport, smoothly interpolating
+    /// between the bottom-right corner and the center of the screen (when expanded).
     pub fn viewport_rect(&self, win_width: u32, win_height: u32) -> (f32, f32, f32) {
         let w = win_width as f32;
         let h = win_height as f32;
@@ -69,7 +69,7 @@ impl MiniGlobeHud {
         (x, y, size)
     }
 
-    /// Verifica se o cursor `(px, py)` está dentro do círculo do Mini-Globo.
+    /// Checks whether the cursor `(px, py)` lies inside the Mini-Globe circle.
     pub fn contains_cursor(&self, px: f32, py: f32, win_width: u32, win_height: u32) -> bool {
         let (vx, vy, size) = self.viewport_rect(win_width, win_height);
         let cx = vx + size * 0.5;
@@ -80,7 +80,7 @@ impl MiniGlobeHud {
         (dx * dx + dy * dy) <= radius * radius
     }
 
-    /// Gira a orientação do Mini-Globo quando o usuário o arrasta.
+    /// Rotates the Mini-Globe orientation when dragged by the user.
     pub fn rotate_globe(&mut self, delta_x: f32, delta_y: f32) {
         let sens = if self.expanded { 0.0055 } else { 0.009 };
         self.target_orb_yaw -= delta_x * sens;
@@ -103,7 +103,7 @@ impl MiniGlobeHud {
         self.hover_anim += (target_hov - self.hover_anim) * (12.0 * dt).clamp(0.0, 1.0);
     }
 
-    /// Posição da câmera externa observando o Mini-Globo.
+    /// Position of the external camera observing the Mini-Globe.
     pub fn eye_position(&self) -> Vec3 {
         let (sin_y, cos_y) = self.orb_yaw.sin_cos();
         let (sin_p, cos_p) = self.orb_pitch.sin_cos();
@@ -121,7 +121,7 @@ impl MiniGlobeHud {
         proj * view
     }
 
-    /// Gera um raio 3D `(origem, direção)` no espaço do Mini-Globo a partir do cursor `(px, py)`.
+    /// Generates a 3D ray `(origin, direction)` in Mini-Globe space from the cursor `(px, py)`.
     pub fn screen_ray(
         &self,
         px: f32,
@@ -144,8 +144,8 @@ impl MiniGlobeHud {
         Some((ray_origin, ray_dir))
     }
 
-    /// Faz raycasting do cursor `(px, py)` na casca do Mini-Globo 3D e retorna `(azimuth, elevation)`
-    /// do ponto clicado/apontado na superfície da esfera.
+    /// Raycasts from the cursor `(px, py)` onto the 3D Mini-Globe shell and returns `(azimuth, elevation)`
+    /// of the clicked/hovered point on the sphere surface.
     pub fn pick_spherical_point(
         &self,
         px: f32,

@@ -1,3 +1,4 @@
+use crate::security::TrustDomain;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
 
@@ -9,28 +10,32 @@ pub struct WindowVertex {
     pub normal: [f32; 3],
 }
 
-/// Abstração para provedores de texturas de janelas reais (XComposite, PipeWire ou Smithay Wayland).
-/// Permite que o motor 3D esférico permaneça desacoplado do protocolo de sistema de janelas.
+/// Abstraction for real window texture providers (PipeWire or Smithay Wayland; Xwayland disabled by policy).
+/// Keeps the 3D spherical engine decoupled from the underlying windowing protocol while enforcing
+/// Qubes-style `TrustDomain` compartmentalization.
 #[allow(dead_code)]
 pub trait WindowSurfaceProvider {
     fn title(&self) -> &str;
+    fn trust_domain(&self) -> TrustDomain;
     fn dimensions(&self) -> (u32, u32);
     fn render_rgba(&self, time_secs: f32) -> Vec<u8>;
 }
 
-/// Janela posicionada na superfície esférica 3D do XSphereDE.
+/// Window positioned on the 3D spherical surface of XSphereDE.
 pub struct SphericalWindow {
     pub id: usize,
     pub title: String,
-    /// Ângulo horizontal na esfera (radianos, 0 = frente -Z)
+    /// Immutable Qubes-style security domain assigned by the trusted compositor
+    pub trust_domain: TrustDomain,
+    /// Horizontal angle on the sphere (radians, `0` = front `-Z`)
     pub azimuth: f32,
-    /// Ângulo vertical na esfera (radianos, 0 = equador)
+    /// Vertical angle on the sphere (radians, `0` = equator)
     pub elevation: f32,
-    /// Distância radial do centro da esfera (permite aproximar/afastar janelas em profundidade!)
+    /// Radial distance from the sphere center (allows pushing/pulling windows in 3D depth)
     pub radius: f32,
-    /// Largura angular em radianos na esfera
+    /// Angular width in radians on the sphere
     pub angular_width: f32,
-    /// Altura angular em radianos na esfera
+    /// Angular height in radians on the sphere
     pub angular_height: f32,
     pub hovered: bool,
     pub focused: bool,
@@ -41,7 +46,7 @@ pub struct SphericalWindow {
 }
 
 impl SphericalWindow {
-    /// Gera a malha 3D curva acompanhando perfeitamente a casca esférica de raio `self.radius`.
+    /// Builds a curved 3D mesh that conforms to the spherical shell of radius `self.radius`.
     pub fn build_curved_mesh(
         azimuth: f32,
         elevation: f32,
@@ -56,7 +61,7 @@ impl SphericalWindow {
 
         for r in 0..=rows {
             let v = r as f32 / rows as f32;
-            // v = 0 é o topo da janela, v = 1 é a base
+            // v = 0 is the top of the window, v = 1 is the bottom
             let phi = elevation + (0.5 - v) * angular_height;
             let (sin_phi, cos_phi) = phi.sin_cos();
 
@@ -70,7 +75,7 @@ impl SphericalWindow {
                     radius * sin_phi,
                     -radius * cos_phi * cos_theta,
                 );
-                // Normal apontando para o centro da esfera (para o usuário)
+                // Normal pointing toward the center of the sphere (toward the user)
                 let normal = (-pos).normalize_or_zero();
 
                 vertices.push(WindowVertex {
@@ -89,7 +94,7 @@ impl SphericalWindow {
                 let i2 = (r + 1) * stride + c;
                 let i3 = i2 + 1;
 
-                // Dupla face para continuar visível caso a câmera passe por trás da janela no espaço 3D
+                // Double-sided indices so the window remains visible if the camera flies behind it in 3D space
                 indices.extend_from_slice(&[i0, i2, i1, i1, i2, i3, i0, i1, i2, i1, i3, i2]);
             }
         }
@@ -108,7 +113,7 @@ impl SphericalWindow {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
     }
 
-    /// Posição 3D cartesiana do centro desta janela na esfera.
+    /// 3D Cartesian world position of this window's center on the sphere.
     pub fn world_center(&self) -> Vec3 {
         let (sin_phi, cos_phi) = self.elevation.sin_cos();
         let (sin_theta, cos_theta) = self.azimuth.sin_cos();
@@ -119,18 +124,18 @@ impl SphericalWindow {
         )
     }
 
-    /// Cosseno do raio angular de proteção da janela (com folga extra quando focada/em uso)
-    /// para bloquear códigos Matrix de passarem sobre a janela.
+    /// Cosine of the angular protection cone for this window (with extra padding when focused/hovered)
+    /// to prevent Matrix code streams from passing in front of the window.
     pub fn shield_cos(&self) -> f32 {
         let half_diag = 0.5 * (self.angular_width.hypot(self.angular_height));
         let margin = if self.focused || self.hovered { 0.14 } else { 0.06 };
         (half_diag + margin).cos()
     }
 
-    /// Faz raycasting 3D exato contra o patch esférico da janela.
-    /// Retorna a distância `t` ao longo do raio se o cursor atingir esta janela 3D.
+    /// Performs exact 3D raycasting against the spherical patch of the window.
+    /// Returns the distance `t` along the ray if the cursor hits this 3D window.
     pub fn intersect_ray(&self, ray_origin: Vec3, ray_dir: Vec3) -> Option<f32> {
-        // Interseção raio-esfera de raio `self.radius` centrada na origem (0,0,0):
+        // Ray-sphere intersection for radius `self.radius` centered at the origin (0,0,0):
         // |O + t*D|^2 = R^2  =>  t^2 + 2*(O.D)*t + (|O|^2 - R^2) = 0
         let b = ray_origin.dot(ray_dir);
         let c = ray_origin.length_squared() - self.radius * self.radius;
@@ -140,13 +145,13 @@ impl SphericalWindow {
         }
         let sqrt_disc = disc.sqrt();
 
-        // Testa as duas raízes (positivas à frente da câmera)
+        // Test both roots (positive distances in front of the camera)
         for t in [-b - sqrt_disc, -b + sqrt_disc] {
             if t <= 0.05 {
                 continue;
             }
             let hit = ray_origin + ray_dir * t;
-            // Converte o ponto de impacto para coordenadas esféricas (azimuth, elevation)
+            // Convert hit point into spherical coordinates (azimuth, elevation)
             let r = hit.length();
             if r < 1e-4 {
                 continue;
@@ -165,7 +170,7 @@ impl SphericalWindow {
     }
 }
 
-/// Diferença angular normalizada para o intervalo [-PI, PI].
+/// Angular difference normalized to the interval `[-PI, PI]`.
 pub fn wrap_angle_diff(a: f32, b: f32) -> f32 {
     let mut diff = a - b;
     while diff > std::f32::consts::PI {
@@ -177,14 +182,20 @@ pub fn wrap_angle_diff(a: f32, b: f32) -> f32 {
     diff
 }
 
-/// Gera uma textura RGBA estilizada para representar janelas do ambiente XSphereDE no protótipo.
+/// Generates a stylized RGBA texture representing XSphereDE desktop windows in the prototype,
+/// respecting `secureblue` (no external thumbnailers) and `Qubes OS` (`TrustDomain` header styling).
 pub fn generate_demo_window_rgba(
     width: u32,
     height: u32,
     theme_variant: usize,
+    trust_domain: TrustDomain,
 ) -> Vec<u8> {
     let mut data = vec![0u8; (width * height * 4) as usize];
     let title_bar_h = (height as f32 * 0.11) as u32;
+    let [tr, tg, tb] = trust_domain.border_color_rgb();
+    let dom_r = (tr * 255.0) as u8;
+    let dom_g = (tg * 255.0) as u8;
+    let dom_b = (tb * 255.0) as u8;
 
     for y in 0..height {
         for x in 0..width {
@@ -192,97 +203,118 @@ pub fn generate_demo_window_rgba(
             let border = x < 3 || x >= width - 3 || y < 3 || y >= height - 3;
 
             if border {
-                data[idx] = 40;
-                data[idx + 1] = 255;
-                data[idx + 2] = 120;
-                data[idx + 3] = 245;
+                data[idx] = dom_r;
+                data[idx + 1] = dom_g;
+                data[idx + 2] = dom_b;
+                data[idx + 3] = 248;
                 continue;
             }
 
             if y < title_bar_h {
-                // Barra de título estilo Cyber-SphereXP
-                let grad = 1.0 - (x as f32 / width as f32) * 0.5;
-                data[idx] = (18.0 * grad) as u8;
-                data[idx + 1] = (115.0 * grad) as u8;
-                data[idx + 2] = (55.0 * grad) as u8;
-                data[idx + 3] = 235;
+                // Qubes-inspired domain-colored title bar
+                let grad = 1.0 - (x as f32 / width as f32) * 0.45;
+                data[idx] = ((dom_r as f32) * 0.46 * grad) as u8;
+                data[idx + 1] = ((dom_g as f32) * 0.46 * grad) as u8;
+                data[idx + 2] = ((dom_b as f32) * 0.46 * grad) as u8;
+                data[idx + 3] = 238;
 
-                // Botões de janela no canto superior direito (fechar, maximizar, esfera-pin)
-                let btn_y = y >= 6 && y + 6 < title_bar_h;
+                // Security domain badge indicator on the left side of the title bar
+                let badge_y = y >= 9 && y + 7 < title_bar_h;
+                if badge_y && x >= 12 && x <= 74 && (x % 6 < 4) {
+                    data[idx] = dom_r;
+                    data[idx + 1] = dom_g;
+                    data[idx + 2] = dom_b;
+                }
+
+                // Window buttons in the top-right corner (close, maximize, sphere-pin)
+                let btn_y = y >= 8 && y + 6 < title_bar_h;
                 if btn_y && x > width - 26 && x < width - 10 {
-                    data[idx] = 230;
+                    data[idx] = 235;
                     data[idx + 1] = 75;
                     data[idx + 2] = 75;
                 } else if btn_y && x > width - 48 && x < width - 32 {
-                    data[idx] = 60;
-                    data[idx + 1] = 240;
-                    data[idx + 2] = 130;
+                    data[idx] = dom_r;
+                    data[idx + 1] = dom_g;
+                    data[idx + 2] = dom_b;
                 }
                 continue;
             }
 
-            // Corpo da janela translúcido escuro com elementos visuais distintos por app
+            // Translucent dark window body with distinct visual elements per app
             let mut r = 8_u8;
-            let mut g = 24_u8;
+            let mut g = 22_u8;
             let mut b = 14_u8;
-            let alpha = 212_u8;
+            let alpha = 214_u8;
 
-            // Scanline sutil
+            // Subtle scanline
             if y % 4 == 0 {
-                g = g.saturating_add(6);
+                g = g.saturating_add(5);
             }
 
             match theme_variant {
                 0 => {
-                    // Terminal Matrix / XSphere Shell
+                    // [DOM0: VAULT] Matrix Terminal // run0 (Zero-SUID Policy)
                     if x > 18 && x < width - 18 && y > title_bar_h + 14 {
                         let line = (y - title_bar_h - 14) / 14;
                         let row_py = (y - title_bar_h - 14) % 14;
                         let max_x = ((line * 73 + 91) % (width - 60)).max(40);
                         if row_py < 8 && x < max_x && (x % 9 < 6) {
-                            r = 45;
-                            g = if line % 4 == 0 { 250 } else { 185 };
-                            b = 95;
+                            if line == 0 {
+                                // First line highlighted with Vault Violet
+                                r = dom_r;
+                                g = dom_g;
+                                b = dom_b;
+                            } else {
+                                r = 55;
+                                g = if line % 4 == 0 { 250 } else { 190 };
+                                b = 105;
+                            }
                         }
                     }
                 }
                 1 => {
-                    // Monitor de Desempenho 3D (Gráfico de onda + barras)
+                    // [TRUSTED] 3D Security & Kernel Auditor (waveform + policy bars)
                     let gx = x as f32 / width as f32;
                     let gy = (y - title_bar_h) as f32 / (height - title_bar_h) as f32;
                     let wave = 0.5 + 0.28 * (gx * 16.0).sin() * (gx * 5.0).cos();
                     if (gy - wave).abs() < 0.022 {
-                        r = 80;
-                        g = 255;
-                        b = 150;
+                        r = dom_r;
+                        g = dom_g;
+                        b = dom_b;
                     } else if gy > wave {
                         g = g.saturating_add(((1.0 - gy) * 45.0) as u8);
                     }
                 }
                 2 => {
-                    // Navegador Espacial de Arquivos (Ícones em grade)
+                    // [ISOLATED] Spatial File Navigator (secureblue No-Thumbnails Policy: vector icons only)
                     let content_y = y - title_bar_h;
                     let cell_x = x / 56;
                     let cell_y = content_y / 56;
-                    let in_icon_x = (x % 56) > 12 && (x % 56) < 44;
-                    let in_icon_y = (content_y % 56) > 10 && (content_y % 56) < 38;
-                    if cell_x > 0 && cell_x < 6 && cell_y > 0 && cell_y < 4 && in_icon_x && in_icon_y {
-                        r = 35;
-                        g = 200;
-                        b = 110;
+                    let local_x = x % 56;
+                    let local_y = content_y % 56;
+                    let in_icon_border = (local_x == 12 || local_x == 43 || local_y == 10 || local_y == 37)
+                        && (12..=43).contains(&local_x)
+                        && (10..=37).contains(&local_y);
+                    let in_safe_glyph = (18..=37).contains(&local_x)
+                        && (16..=31).contains(&local_y)
+                        && (local_y % 5 < 3);
+                    if cell_x > 0 && cell_x < 6 && cell_y > 0 && cell_y < 4 && (in_icon_border || in_safe_glyph) {
+                        r = dom_r;
+                        g = dom_g;
+                        b = dom_b;
                     }
                 }
                 _ => {
-                    // Radar / Mapa Esférico do Desktop
+                    // [DISP-RED] Disposable Quarantine Sandbox Radar
                     let cx = width as f32 * 0.5;
                     let cy = (height + title_bar_h) as f32 * 0.5;
                     let dx = x as f32 - cx;
                     let dy = y as f32 - cy;
                     let dist = (dx * dx + dy * dy).sqrt();
                     if (dist - 35.0).abs() < 1.8 || (dist - 70.0).abs() < 1.8 || (dist - 105.0).abs() < 2.0 {
-                        r = 50;
-                        g = 235;
-                        b = 120;
+                        r = dom_r;
+                        g = dom_g;
+                        b = dom_b;
                     }
                 }
             }

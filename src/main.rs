@@ -1,11 +1,18 @@
+#![forbid(unsafe_code)]
+
 mod camera;
 mod minimap;
+mod security;
 mod sphere_env;
 mod window3d;
 
 use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
 use minimap::MiniGlobeHud;
+use security::{
+    validate_surface_buffer, verify_shader_source_integrity, SecureClipboardVault,
+    SecurityAuditReport, SecurityPolicy, TrustDomain,
+};
 use sphere_env::{generate_matrix_code_volume, generate_sphere_grid, GridVertex, MatrixVertex};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -33,6 +40,7 @@ struct GlobalsUniform {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct WindowStateUniform {
     state: [f32; 4],
+    trust_color: [f32; 4],
 }
 
 struct WindowRenderEntry {
@@ -52,7 +60,7 @@ struct XSphereRenderer {
     globals_buffer: wgpu::Buffer,
     globals_bind_group: wgpu::BindGroup,
 
-    // Mini-Mapa do Globo 3D (HUD no canto inferior direito)
+    // 3D Mini-Globe HUD (in the bottom-right corner)
     minimap: MiniGlobeHud,
     minimap_globals_buffer: wgpu::Buffer,
     minimap_globals_bind_group: wgpu::BindGroup,
@@ -70,23 +78,29 @@ struct XSphereRenderer {
     window_pipeline: wgpu::RenderPipeline,
     windows: Vec<WindowRenderEntry>,
 
+    // Hardened Security Subsystem (secureblue + Qubes OS policies)
+    security_policy: SecurityPolicy,
+    clipboard_vault: SecureClipboardVault,
+    lockdown_active: bool,
+
     start_time: Instant,
     last_frame: Instant,
     matrix_speed_mult: f32,
 
-    // Estado de interação espacial 3D
+    // 3D spatial interaction state
     cursor_pos: (f32, f32),
     last_cursor_pos: Option<(f32, f32)>,
     right_mouse_down: bool,
     left_mouse_down: bool,
     free_look_mode: bool,
     shift_held: bool,
+    ctrl_held: bool,
     keys_pressed: HashSet<KeyCode>,
     hovered_window: Option<usize>,
     focused_window: Option<usize>,
     dragging_window: Option<usize>,
 
-    // Interação com o Mini-Globo
+    // Mini-Globe interaction state
     minimap_dragging: bool,
     minimap_drag_distance: f32,
 }
@@ -129,7 +143,7 @@ impl XSphereRenderer {
 
         let surface = instance
             .create_surface(window.clone())
-            .expect("Falha ao criar superfície wgpu");
+            .expect("Failed to create wgpu surface");
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -138,9 +152,9 @@ impl XSphereRenderer {
                 force_fallback_adapter: false,
             })
             .await
-            .expect("Nenhum adaptador de GPU compatível encontrado");
+            .expect("No compatible GPU adapter found");
 
-        log::info!("GPU selecionada para XSphereDE: {:?}", adapter.get_info().name);
+        log::info!("Selected GPU for XSphereDE: {:?}", adapter.get_info().name);
 
         let (device, queue) = adapter
             .request_device(
@@ -153,7 +167,7 @@ impl XSphereRenderer {
                 None,
             )
             .await
-            .expect("Falha ao inicializar dispositivo gráfico");
+            .expect("Failed to initialize graphics device");
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -185,12 +199,38 @@ impl XSphereRenderer {
         let camera = SphereCamera::new(width, height);
         let minimap = MiniGlobeHud::new(Self::SPHERE_RADIUS);
 
+        // Enforce maximum hardened security policy (secureblue + Qubes OS)
+        let security_policy = SecurityPolicy::maximum_hardened();
+        assert!(
+            security_policy.is_fully_enforced(),
+            "XSphereDE requires all mandatory security policies to be enabled"
+        );
+
+        let shader_source = include_str!("shader.wgsl");
+        if security_policy.verify_shader_integrity {
+            let digest = verify_shader_source_integrity(shader_source)
+                .expect("CRITICAL SECURITY ALERT: WGSL shader cryptographic integrity check failed");
+            log::info!(
+                "Verified WGSL shader SHA-256 cryptographic integrity: {}",
+                digest
+            );
+        }
+
+        let audit_report = SecurityAuditReport::run_audit(&security_policy, shader_source);
+        log::info!("[SECURITY AUDIT] {}", audit_report.summary_line());
+        if !audit_report.dangerous_env_detected.is_empty() {
+            log::warn!(
+                "[SECURITY AUDIT] Untrusted/injectable environment variables detected: {:?}",
+                audit_report.dangerous_env_detected
+            );
+        }
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("XSphereDE Unified Shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
-        // Uniform global (câmera principal + tempo)
+        // Global uniform (main camera + elapsed time)
         let globals_uniform = GlobalsUniform {
             view_proj: camera.view_proj_matrix().to_cols_array_2d(),
             camera_pos: [0.0, 0.0, 0.0, 1.0],
@@ -252,7 +292,7 @@ impl XSphereRenderer {
             }],
         });
 
-        // BindGroupLayout para janelas 3D curvas
+        // BindGroupLayout for curved 3D windows
         let window_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("SphericalWindow BindGroupLayout"),
             entries: &[
@@ -299,7 +339,7 @@ impl XSphereRenderer {
                 push_constant_ranges: &[],
             });
 
-        // 1. Pipeline da Grade Esférica (SphereXP Wireframe)
+        // 1. Spherical Grid Pipeline (SphereXP Wireframe)
         let grid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("SphereXP Grid Pipeline"),
             layout: Some(&basic_pipeline_layout),
@@ -339,7 +379,7 @@ impl XSphereRenderer {
             cache: None,
         });
 
-        // 2. Pipeline Volumétrico 3D do Código Matrix (Additive + Alpha Blend)
+        // 2. 3D Volumetric Matrix Code Pipeline (Additive + Alpha Blend)
         let matrix_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Matrix Volumetric Code Pipeline"),
             layout: Some(&basic_pipeline_layout),
@@ -391,7 +431,7 @@ impl XSphereRenderer {
             cache: None,
         });
 
-        // 3. Pipeline das Janelas 3D Curvas na Esfera
+        // 3. Curved 3D Spherical Windows Pipeline
         let window_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Spherical 3D Window Pipeline"),
             layout: Some(&window_pipeline_layout),
@@ -436,7 +476,7 @@ impl XSphereRenderer {
             cache: None,
         });
 
-        // 4. Pipeline do Fundo Holográfico do Mini-Globo (desenha o orbe e limpa o depth buffer do HUD)
+        // 4. Holographic Mini-Globe Background Pipeline (draws the orb and clears the HUD depth buffer)
         let minimap_bg_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("MiniGlobe Orb Background Pipeline"),
             layout: Some(&basic_pipeline_layout),
@@ -473,7 +513,7 @@ impl XSphereRenderer {
             cache: None,
         });
 
-        // Geometria da Esfera e do Volume de Código Matrix
+        // Sphere Grid and Matrix Code Volume Geometry
         let grid_vertices = generate_sphere_grid(Self::SPHERE_RADIUS, 24, 14);
         let grid_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Grid Vertex Buffer"),
@@ -493,7 +533,7 @@ impl XSphereRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // Cria 4 janelas 3D curvas distribuídas ao redor da esfera
+        // Create 4 curved 3D windows distributed around the sphere
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Window Texture Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -503,7 +543,8 @@ impl XSphereRenderer {
 
         let demo_specs = [
             (
-                "Terminal Matrix // XSphereShell",
+                "Matrix Vault Terminal // run0",
+                TrustDomain::CoreVault,
                 -0.45_f32,
                 0.12_f32,
                 9.5_f32,
@@ -512,7 +553,8 @@ impl XSphereRenderer {
                 0usize,
             ),
             (
-                "Monitor de Telemetria 3D",
+                "3D Security & Kernel Auditor",
+                TrustDomain::TrustedWork,
                 0.48_f32,
                 0.15_f32,
                 10.5_f32,
@@ -521,7 +563,8 @@ impl XSphereRenderer {
                 1usize,
             ),
             (
-                "Navegador de Arquivos Espacial",
+                "Spatial File Navigator (No-Thumbnails)",
+                TrustDomain::IsolatedApp,
                 -0.02_f32,
                 -0.34_f32,
                 8.8_f32,
@@ -530,7 +573,8 @@ impl XSphereRenderer {
                 2usize,
             ),
             (
-                "Radar da Esfera Desktop (Atrás)",
+                "Disposable Quarantine Sandbox (Rear)",
+                TrustDomain::DisposableRed,
                 2.55_f32,
                 0.08_f32,
                 10.2_f32,
@@ -541,12 +585,14 @@ impl XSphereRenderer {
         ];
 
         let mut windows = Vec::new();
-        for (id, (title, azimuth, elevation, radius, ang_w, ang_h, variant)) in
+        for (id, (title, trust_domain, azimuth, elevation, radius, ang_w, ang_h, variant)) in
             demo_specs.into_iter().enumerate()
         {
             let tex_w = 512;
             let tex_h = 340;
-            let rgba = generate_demo_window_rgba(tex_w, tex_h, variant);
+            let rgba = generate_demo_window_rgba(tex_w, tex_h, variant, trust_domain);
+            validate_surface_buffer(tex_w, tex_h, &rgba)
+                .expect("Surface buffer validation failed against GPU safety bounds");
 
             let texture = device.create_texture_with_data(
                 &queue,
@@ -569,8 +615,10 @@ impl XSphereRenderer {
             );
             let tex_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+            let [tr, tg, tb] = trust_domain.border_color_rgb();
             let state_uniform = WindowStateUniform {
                 state: [id as f32, 0.0, if id == 0 { 1.0 } else { 0.0 }, 0.94],
+                trust_color: [tr, tg, tb, 0.0],
             };
             let state_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Window State Uniform"),
@@ -615,6 +663,7 @@ impl XSphereRenderer {
                 win: SphericalWindow {
                     id,
                     title: title.to_string(),
+                    trust_domain,
                     azimuth,
                     elevation,
                     radius,
@@ -655,6 +704,9 @@ impl XSphereRenderer {
             matrix_index_count: matrix_indices.len() as u32,
             window_pipeline,
             windows,
+            security_policy,
+            clipboard_vault: SecureClipboardVault::new(),
+            lockdown_active: false,
             start_time: now,
             last_frame: now,
             matrix_speed_mult: 1.0,
@@ -663,7 +715,8 @@ impl XSphereRenderer {
             right_mouse_down: false,
             left_mouse_down: false,
             free_look_mode: false,
-            shift_held: bool::default(),
+            shift_held: false,
+            ctrl_held: false,
             keys_pressed: HashSet::new(),
             hovered_window: None,
             focused_window: Some(0),
@@ -684,7 +737,7 @@ impl XSphereRenderer {
         }
     }
 
-    /// Faz raycasting 3D nas janelas (em suas profundidades reais `radius`) usando o raio do Mini-Globo.
+    /// Performs 3D raycasting against the windows (at their true radial depths `radius`) using the Mini-Globe ray.
     fn raycast_window_in_minimap(&self, px: f32, py: f32) -> Option<usize> {
         let (ray_origin, ray_dir) =
             self.minimap
@@ -700,7 +753,7 @@ impl XSphereRenderer {
         best_hit.map(|(idx, _)| idx)
     }
 
-    /// Quando o usuário clica no Mini-Globo, direciona o ambiente 3D exatamente para lá!
+    /// When the user clicks inside the Mini-Globe, smoothly directs the 3D environment there.
     fn jump_to_minimap_point(&mut self, px: f32, py: f32) {
         if let Some(win_idx) = self.raycast_window_in_minimap(px, py) {
             self.focused_window = Some(win_idx);
@@ -720,13 +773,13 @@ impl XSphereRenderer {
         }
     }
 
-    /// Converte a posição atual do mouse em coordenadas NDC [-1, 1] e faz raycasting 3D nas janelas
-    /// (tanto na visão principal quanto nas profundidades reais dentro do Mini-Globo).
+    /// Converts the current mouse position into NDC `[-1, 1]` coordinates and performs 3D raycasting
+    /// against windows (both in the main view and at their true radial depths inside the Mini-Globe).
     fn update_raycast_hover(&mut self) {
         let w = self.config.width.max(1);
         let h = self.config.height.max(1);
 
-        // 1. Verifica primeiro se o mouse está sobre o Mini-Globo
+        // 1. First check whether the mouse cursor is hovering over the Mini-Globe
         self.minimap.is_hovered =
             self.minimap
                 .contains_cursor(self.cursor_pos.0, self.cursor_pos.1, w, h);
@@ -737,21 +790,25 @@ impl XSphereRenderer {
             if let Some(idx) = hovered_win {
                 let win = &self.windows[idx].win;
                 self.window.set_title(&format!(
-                    "XSphereDE [Mini-Globo] — Janela: [{}] (Profundidade R: {:.1}m — Use Scroll para mudar profundidade!)",
-                    win.title, win.radius
+                    "XSphereDE v{} [Mini-Globe] — [{}] {} (Depth R: {:.1}m — Scroll to adjust depth!)",
+                    env!("CARGO_PKG_VERSION"),
+                    win.trust_domain.badge_label(),
+                    win.title,
+                    win.radius
                 ));
             } else if let Some((az, el)) =
                 self.minimap
                     .pick_spherical_point(self.cursor_pos.0, self.cursor_pos.1, w, h)
             {
                 self.window.set_title(&format!(
-                    "XSphereDE [Mini-Globo] — Clique Esq: Ir para ({:.0}°, {:.0}°) | Clique Dir ou 'G': Expandir/Recolher Globo",
+                    "XSphereDE v{} [Mini-Globe] — Left Click: Jump to ({:.0}°, {:.0}°) | Right Click or 'G': Expand/Collapse Globe",
+                    env!("CARGO_PKG_VERSION"),
                     az.to_degrees(),
                     el.to_degrees()
                 ));
             }
         } else {
-            // 2. Raycasting normal nas janelas 3D da cena principal
+            // 2. Standard 3D window raycasting in the main scene
             let ndc_x = (self.cursor_pos.0 / w as f32) * 2.0 - 1.0;
             let ndc_y = 1.0 - (self.cursor_pos.1 / h as f32) * 2.0;
             let (ray_origin, ray_dir) = self.camera.screen_ray(ndc_x, ndc_y);
@@ -769,24 +826,36 @@ impl XSphereRenderer {
                 self.hovered_window = best_hit.map(|(idx, _)| idx);
                 if let Some(idx) = self.hovered_window {
                     let win = &self.windows[idx].win;
+                    let net_tag = if win.trust_domain.allows_network() {
+                        "NET-SANDBOXED"
+                    } else {
+                        "AIR-GAPPED"
+                    };
                     self.window.set_title(&format!(
-                        "XSphereDE — Em foco: [{}] (Azimute: {:.1}°, Elevação: {:.1}°, Profundidade R: {:.1}m — Scroll/Shift+Scroll altera profundidade)",
+                        "XSphereDE v{} — [{} | {}] {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
+                        env!("CARGO_PKG_VERSION"),
+                        win.trust_domain.badge_label(),
+                        net_tag,
                         win.title,
                         win.azimuth.to_degrees(),
                         win.elevation.to_degrees(),
                         win.radius
                     ));
                 } else {
-                    self.window.set_title(
-                        "XSphereDE [Rust + wgpu] — Mini-Globo no canto inf. direito (Clique Dir ou 'G': Expandir) | Scroll/WASD: Navegar",
-                    );
+                    self.window.set_title(concat!(
+                        "XSphereDE v",
+                        env!("CARGO_PKG_VERSION"),
+                        " [Hardened: secureblue + Qubes OS] — Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe"
+                    ));
                 }
             }
         }
 
+        let lockdown_flag = if self.lockdown_active { 1.0 } else { 0.0 };
         for (idx, entry) in self.windows.iter_mut().enumerate() {
             entry.win.hovered = self.hovered_window == Some(idx);
             entry.win.focused = self.focused_window == Some(idx);
+            let [tr, tg, tb] = entry.win.trust_domain.border_color_rgb();
             let uniform = WindowStateUniform {
                 state: [
                     entry.win.id as f32,
@@ -794,6 +863,7 @@ impl XSphereRenderer {
                     if entry.win.focused { 1.0 } else { 0.0 },
                     0.94,
                 ],
+                trust_color: [tr, tg, tb, lockdown_flag],
             };
             self.queue
                 .write_buffer(&entry.state_buffer, 0, bytemuck::cast_slice(&[uniform]));
@@ -805,7 +875,7 @@ impl XSphereRenderer {
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
-        // Movimentação espacial contínua (W/A/S/D + Q/E para navegar por entre os códigos Matrix)
+        // Continuous spatial movement (W/A/S/D + Q/E to fly through the Matrix code corridors)
         let speed = if self.shift_held { 18.0 } else { 9.5 } * dt;
         let mut fwd = 0.0;
         let mut right = 0.0;
@@ -848,7 +918,7 @@ impl XSphereRenderer {
 
         let elapsed = (now - self.start_time).as_secs_f32();
         let cam_fwd = self.camera.forward();
-        // Alcance frontal de visão limpa: garante corredor 100% limpo até depois da janela em foco
+        // Frontal clear field-of-view reach: guarantees a 100% clear corridor past the focused window
         let active_clear_dist = self
             .hovered_window
             .or(self.focused_window)
@@ -886,7 +956,7 @@ impl XSphereRenderer {
             bytemuck::cast_slice(&[globals_uniform]),
         );
 
-        // Atualiza uniform do Mini-Globo HUD (janelas são renderizadas nas suas profundidades reais!)
+        // Update Mini-Globe HUD uniform (windows are rendered at their true radial depths!)
         let minimap_eye = self.minimap.eye_position();
         let minimap_globals = GlobalsUniform {
             view_proj: self.minimap.view_proj_matrix().to_cols_array_2d(),
@@ -926,7 +996,7 @@ impl XSphereRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Fundo verde-abissal escuro do universo Matrix
+                        // Deep abyssal Matrix-green background
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.004,
                             g: 0.016,
@@ -949,15 +1019,15 @@ impl XSphereRenderer {
             });
 
             // ================================================================
-            // CENA 3D PRINCIPAL (Tela Inteira)
+            // MAIN 3D SCENE (Full Screen)
             // ================================================================
-            // 1. Desenha a grade esférica do SphereXP
+            // 1. Draw the SphereXP wireframe grid
             rpass.set_pipeline(&self.grid_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.grid_vertex_buffer.slice(..));
             rpass.draw(0..self.grid_vertex_count, 0..1);
 
-            // 2. Desenha as janelas 3D curvas na esfera
+            // 2. Draw curved 3D windows on the sphere
             rpass.set_pipeline(&self.window_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             for entry in &self.windows {
@@ -970,7 +1040,7 @@ impl XSphereRenderer {
                 rpass.draw_indexed(0..entry.win.index_count, 0, 0..1);
             }
 
-            // 3. Desenha o volume tridimensional de fileiras de código Matrix
+            // 3. Draw the 3D volumetric Matrix code streams
             rpass.set_pipeline(&self.matrix_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.matrix_vertex_buffer.slice(..));
@@ -981,7 +1051,7 @@ impl XSphereRenderer {
             rpass.draw_indexed(0..self.matrix_index_count, 0, 0..1);
 
             // ================================================================
-            // 4. MINI-MAPA DO GLOBO 3D INTERATIVO (HUD no canto inf. direito)
+            // 4. INTERACTIVE 3D MINI-GLOBE HUD (Bottom-Right / Overview)
             // ================================================================
             let (hx, hy, hsize) = self
                 .minimap
@@ -989,18 +1059,18 @@ impl XSphereRenderer {
             if hx + hsize <= self.config.width as f32 && hy + hsize <= self.config.height as f32 {
                 rpass.set_viewport(hx, hy, hsize, hsize, 0.0, 1.0);
 
-                // 4a. Orbe holográfico de fundo (também reseta o depth buffer do Mini-Globo para 0.999)
+                // 4a. Background holographic orb (also resets the Mini-Globe depth buffer to 0.999)
                 rpass.set_pipeline(&self.minimap_bg_pipeline);
                 rpass.set_bind_group(0, &self.minimap_globals_bind_group, &[]);
                 rpass.draw(0..6, 0..1);
 
-                // 4b. Grade esférica 3D vista por fora no Mini-Globo
+                // 4b. 3D spherical grid viewed from the outside inside the Mini-Globe
                 rpass.set_pipeline(&self.grid_pipeline);
                 rpass.set_bind_group(0, &self.minimap_globals_bind_group, &[]);
                 rpass.set_vertex_buffer(0, self.grid_vertex_buffer.slice(..));
                 rpass.draw(0..self.grid_vertex_count, 0..1);
 
-                // 4c. Janelas 3D renderizadas em suas profundidades radiais reais dentro do Mini-Globo!
+                // 4c. 3D windows rendered at their true radial depths inside the Mini-Globe!
                 rpass.set_pipeline(&self.window_pipeline);
                 rpass.set_bind_group(0, &self.minimap_globals_bind_group, &[]);
                 for entry in &self.windows {
@@ -1030,15 +1100,17 @@ impl ApplicationHandler for XSphereApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_none() {
             let win_attrs = Window::default_attributes()
-                .with_title(
-                    "XSphereDE [Rust + wgpu] — Mini-Globo no canto inf. direito (Girar / Clicar) | Scroll/WASD: Voar pelos Códigos Matrix",
-                )
+                .with_title(concat!(
+                    "XSphereDE v",
+                    env!("CARGO_PKG_VERSION"),
+                    " [Rust + wgpu] — Mini-Globe in bottom-right (Rotate / Click) | Scroll/WASD: Fly through Matrix Code"
+                ))
                 .with_inner_size(PhysicalSize::new(1366, 840));
 
             let window = Arc::new(
                 event_loop
                     .create_window(win_attrs)
-                    .expect("Falha ao criar janela do XSphereDE"),
+                    .expect("Failed to create XSphereDE window"),
             );
 
             let renderer = pollster::block_on(XSphereRenderer::new(window));
@@ -1061,6 +1133,7 @@ impl ApplicationHandler for XSphereApp {
             WindowEvent::Resized(size) => renderer.resize(size),
             WindowEvent::ModifiersChanged(mods) => {
                 renderer.shift_held = mods.state().shift_key();
+                renderer.ctrl_held = mods.state().control_key();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
@@ -1074,6 +1147,82 @@ impl ApplicationHandler for XSphereApp {
                                     } else {
                                         event_loop.exit();
                                     }
+                                }
+                                // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + C (Copy to Vault)
+                                KeyCode::KeyC if renderer.ctrl_held && renderer.shift_held => {
+                                    if renderer.lockdown_active {
+                                        log::warn!("[SECURITY] Clipboard copy blocked: Lockdown active");
+                                    } else if let Some(idx) = renderer.focused_window {
+                                        let win = &renderer.windows[idx].win;
+                                        renderer.clipboard_vault.seal_from_window(
+                                            win.trust_domain,
+                                            &win.title,
+                                            format!("sealed-buffer-from-window-{}", win.id),
+                                        );
+                                        let msg = format!(
+                                            "XSphereDE [CLIPBOARD VAULT] — Copied & Sealed from [{}] ({}) | Focus target & press Ctrl+Shift+V",
+                                            win.trust_domain.badge_label(),
+                                            win.title
+                                        );
+                                        log::info!("{}", msg);
+                                        renderer.window.set_title(&msg);
+                                    }
+                                }
+                                // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + V (Paste & Auto-Wipe)
+                                KeyCode::KeyV if renderer.ctrl_held && renderer.shift_held => {
+                                    if renderer.lockdown_active {
+                                        log::warn!("[SECURITY] Clipboard paste blocked: Lockdown active");
+                                    } else if let Some(idx) = renderer.focused_window {
+                                        let dest_win = &renderer.windows[idx].win;
+                                        match renderer
+                                            .clipboard_vault
+                                            .unseal_to_window(dest_win.trust_domain)
+                                        {
+                                            Ok((src_dom, src_title, _payload)) => {
+                                                let msg = format!(
+                                                    "XSphereDE [CLIPBOARD VAULT] — Transfer APPROVED: [{}] ({}) -> [{}] ({}) (Vault auto-wiped!)",
+                                                    src_dom.badge_label(),
+                                                    src_title,
+                                                    dest_win.trust_domain.badge_label(),
+                                                    dest_win.title
+                                                );
+                                                log::info!("{}", msg);
+                                                renderer.window.set_title(&msg);
+                                            }
+                                            Err(violation) => {
+                                                let msg = format!("XSphereDE [SECURITY ALERT] — {}", violation);
+                                                log::warn!("{}", msg);
+                                                renderer.window.set_title(&msg);
+                                            }
+                                        }
+                                    }
+                                }
+                                // Instant Sphere Lockdown Mode ('L'): Blanks all window textures & wipes clipboard
+                                KeyCode::KeyL => {
+                                    renderer.lockdown_active = !renderer.lockdown_active;
+                                    if renderer.lockdown_active {
+                                        renderer.clipboard_vault.wipe();
+                                        renderer.dragging_window = None;
+                                        let msg = "XSphereDE [LOCKDOWN ACTIVE] — All 3D window surfaces encrypted/blanked & Clipboard wiped (Press 'L' to unlock)";
+                                        log::warn!("{}", msg);
+                                        renderer.window.set_title(msg);
+                                    } else {
+                                        let msg = "XSphereDE [LOCKDOWN LIFTED] — Trusted 3D workspace restored";
+                                        log::info!("{}", msg);
+                                        renderer.window.set_title(msg);
+                                    }
+                                }
+                                // Runtime Security Audit Report ('F12')
+                                KeyCode::F12 => {
+                                    let report = SecurityAuditReport::run_audit(
+                                        &renderer.security_policy,
+                                        include_str!("shader.wgsl"),
+                                    );
+                                    let summary = report.summary_line();
+                                    log::info!("[SECURITY AUDIT] {}", summary);
+                                    renderer
+                                        .window
+                                        .set_title(&format!("XSphereDE [SECURITY AUDIT] — {}", summary));
                                 }
                                 KeyCode::KeyG => {
                                     renderer.minimap.toggle_expanded();
@@ -1135,7 +1284,7 @@ impl ApplicationHandler for XSphereApp {
                             renderer.minimap_drag_distance = 0.0;
                         } else if state == ElementState::Released && renderer.minimap_dragging {
                             renderer.minimap_dragging = false;
-                            // Clique direito rápido no Mini-Globo expande/recolhe o Globo na tela!
+                            // Quick right-click on the Mini-Globe expands/collapses the Globe on screen
                             if renderer.minimap_drag_distance < 6.0 && on_minimap {
                                 renderer.minimap.toggle_expanded();
                             }
@@ -1155,7 +1304,7 @@ impl ApplicationHandler for XSphereApp {
                                 renderer.dragging_window = None;
                             }
                         } else {
-                            // Soltou o botão esquerdo: se foi um clique rápido no Mini-Globo, gira o ambiente até lá!
+                            // Released left mouse button: if it was a quick click on the Mini-Globe, rotate the view there
                             if renderer.minimap_dragging {
                                 renderer.minimap_dragging = false;
                                 if renderer.minimap_drag_distance < 6.0 {
@@ -1177,10 +1326,10 @@ impl ApplicationHandler for XSphereApp {
                     if renderer.minimap_dragging {
                         let step_dist = (dx * dx + dy * dy).sqrt();
                         renderer.minimap_drag_distance += step_dist;
-                        // Arrastar no Mini-Globo gira o globo 3D!
+                        // Dragging inside the Mini-Globe rotates the 3D globe
                         renderer.minimap.rotate_globe(dx, dy);
                     } else if let Some(win_idx) = renderer.dragging_window {
-                        // Arrasta a janela 3D ao longo da superfície curva da esfera (azimuth, elevation)
+                        // Drag the 3D window along the curved surface of the sphere (azimuth, elevation)
                         let entry = &mut renderer.windows[win_idx];
                         entry.win.azimuth += dx * 0.0032;
                         entry.win.elevation =
@@ -1210,8 +1359,8 @@ impl ApplicationHandler for XSphereApp {
                     renderer.config.height,
                 );
 
-                // Se o cursor está sobre uma janela (na cena principal OU dentro do Mini-Globo!)
-                // ou se Shift está pressionado, o Scroll altera a profundidade radial da janela dentro do globo!
+                // If the cursor is over a window (in the main scene OR inside the Mini-Globe)
+                // or if Shift is held, scrolling adjusts the radial depth of the window inside the globe
                 if let Some(win_idx) = renderer.hovered_window.or(if renderer.shift_held {
                     renderer.focused_window
                 } else {
@@ -1221,10 +1370,10 @@ impl ApplicationHandler for XSphereApp {
                     entry.win.radius = (entry.win.radius - scroll_y * 0.95).clamp(4.0, 24.5);
                     entry.win.update_geometry(&renderer.queue);
                 } else if on_minimap {
-                    // Scroll sobre área vazia do Mini-Globo gira o globo horizontalmente
+                    // Scrolling over empty area of the Mini-Globe rotates the globe horizontally
                     renderer.minimap.rotate_globe(scroll_y * 28.0, 0.0);
                 } else {
-                    // Scroll sobre espaço vazio da esfera voa para frente/trás
+                    // Scrolling over empty space in the sphere flies forward/backward
                     renderer.camera.translate_local(scroll_y * 1.65, 0.0, 0.0);
                 }
             }
@@ -1237,7 +1386,7 @@ impl ApplicationHandler for XSphereApp {
                         renderer.resize(size);
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(e) => log::warn!("Erro de superfície: {:?}", e),
+                    Err(e) => log::warn!("Surface error: {:?}", e),
                 }
                 renderer.window.request_redraw();
             }
@@ -1254,13 +1403,16 @@ impl ApplicationHandler for XSphereApp {
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    log::info!("Iniciando XSphereDE — Ambiente Desktop 3D Esférico em Rust...");
+    log::info!(
+        "Starting XSphereDE v{} — 3D Spherical Desktop Environment in Rust...",
+        env!("CARGO_PKG_VERSION")
+    );
 
-    let event_loop = EventLoop::new().expect("Falha ao criar EventLoop");
+    let event_loop = EventLoop::new().expect("Failed to create EventLoop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
     let mut app = XSphereApp::default();
     event_loop
         .run_app(&mut app)
-        .expect("Erro durante a execução do XSphereDE");
+        .expect("Error while running XSphereDE");
 }

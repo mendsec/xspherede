@@ -1,74 +1,84 @@
 # XSphereDE 🌐🟢
 
-**XSphereDE** é um ambiente de trabalho tridimensional esférico (3D Desktop Environment) escrito em **Rust** com renderização acelerada por GPU via **wgpu** e **winit**, inspirado no clássico **SphereXP** e na estética volumétrica de **Matrix**.
+**XSphereDE** is a 3D Spherical Desktop Environment written in **Rust** with GPU-accelerated rendering powered by **wgpu** and **winit**, inspired by the classic **SphereXP** desktop and the volumetric digital rain aesthetics of **The Matrix**.
 
-Em vez de limitar as janelas a um plano 2D tradicional, o XSphereDE posiciona o usuário no centro de uma esfera 3D de 360°, onde as janelas acompanham a curvatura esférica, possuem profundidade radial ajustável $(\theta, \phi, r)$ e são emolduradas por corredores tridimensionais de códigos Matrix pelos quais é possível voar espacialmente.
-
----
-
-## ✨ Funcionalidades Atuais (Protótipo v0.1)
-
-- **Espaço de Trabalho Esférico 360° (`SphereXP Grid`):**
-  - Grade geodésica 3D com meridianos, paralelos, linha do equador destacada e anéis polares superior e inferior.
-  - Câmera espacial suave (*damping*) com rotação orbital em 360° e translação 3D livre pelo interior da esfera.
-- **Chuva Volumétrica 3D de Código Matrix (`Matrix Code Volume`):**
-  - Centenas de colunas/fileiras 3D de código Matrix geradas proceduralmente via shader WGSL (glifos estilo Katakana/binário em matriz `5x7`, cabeça brilhante branco-esverdeada e rastro fosforescente).
-  - Ao avançar pelo espaço 3D (`Scroll` ou `WASD`), a câmera atravessa fisicamente as fileiras de código como no filme *Matrix*.
-- **Campo de Visão Limpa Mínimo & Escudo Angular por Janela:**
-  - As fileiras de código Matrix respeitam um raio mínimo de trabalho limpo e um **cone frontal de leitura** dinâmico.
-  - Cada janela aberta projeta um **escudo angular 3D** até o observador, garantindo que códigos Matrix nunca passem pela frente de uma janela em uso, independentemente da profundidade em que ela esteja.
-- **Janelas 3D Curvas com Profundidade Radial (`SphericalWindow`):**
-  - Malhas subdivididas (`16x12`) que acompanham a curvatura exata da esfera no raio $r$ de cada janela.
-  - *Raycasting* esférico exato para foco, *hover*, arraste em coordenadas $(\theta, \phi)$ e ajuste de profundidade radial $r$ (`4.0m` a `24.5m`).
-  - Arquitetura desacoplada via trait `WindowSurfaceProvider`, pronta para integração com captura de janelas reais (PipeWire, XComposite ou compositor Wayland via Smithay/DMA-BUF).
-- **Mini-Globo 3D Interativo e Expansível (`MiniGlobeHud`):**
-  - Visão externa 3D da esfera no canto inferior direito mostrando todas as janelas abertas nas suas **profundidades radiais reais** dentro do globo.
-  - Permite girar o globo livremente, alterar a profundidade das janelas com o `Scroll`, **expandir o globo para o centro da tela** (modo *Overview* do SphereXP) e clicar em qualquer janela ou coordenada para a câmera principal viajar suavemente até lá.
+Instead of confining windows to a traditional flat 2D plane, XSphereDE places the user at the center of a 360° 3D sphere where windows conform to the spherical curvature, feature adjustable radial depth $(\theta, \phi, r)$, and are surrounded by three-dimensional corridors of falling Matrix code that you can physically fly through.
 
 ---
 
-## 🎮 Controles e Atalhos
+## ✨ Current Features (Prototype v0.0.1)
 
-| Ação | Controle / Atalho |
+- **360° Spherical Workspace (`SphereXP Grid`):**
+  - 3D geodesic wireframe grid with meridians, parallels, a highlighted equator line, and upper/lower polar rings.
+  - Smooth damped spatial camera with 360° orbital rotation and free 3D translation inside the sphere.
+- **3D Volumetric Matrix Code Rain (`Matrix Code Volume`):**
+  - Hundreds of 3D Matrix code ribbons procedurally generated in a WGSL shader (`5x7` stylized half-width Katakana/binary glyph grid, bright greenish-white leading drop head, and phosphorescent trail).
+  - Moving through 3D space (`Scroll` or `WASD`) lets the camera physically fly between the code columns.
+- **Minimum Clear Field of View & Per-Window Angular Shield:**
+  - Matrix code columns respect a minimum clear workspace radius and a dynamic **frontal reading cone**.
+  - Every open window projects a **3D angular shield** toward the observer, ensuring Matrix code streams never obscure a window in use, regardless of its radial depth.
+- **Curved 3D Windows with Radial Depth (`SphericalWindow`):**
+  - Subdivided curved meshes (`16x12`) that match the exact curvature of the sphere at each window's radius $r$.
+  - Exact spherical raycasting for focus, hover, dragging across $(\theta, \phi)$ coordinates, and radial depth adjustment $r$ (`4.0m` to `24.5m`).
+  - Decoupled architecture via the `WindowSurfaceProvider` trait, ready for real window capture integration (PipeWire, XComposite, or native Wayland compositor surfaces via Smithay/DMA-BUF).
+- **Interactive & Expandable 3D Mini-Globe (`MiniGlobeHud`):**
+  - External 3D view of the sphere in the bottom-right corner displaying all open windows at their **true radial depths** inside the globe.
+  - Supports free globe rotation, window depth adjustment via `Scroll`, **expanding the globe to the center of the screen** (SphereXP *Overview* mode), and clicking any window or spherical coordinate to smoothly fly the main camera there.
+- **Hardened Security Architecture (`secureblue` + `Qubes OS` — [`src/security.rs`](src/security.rs) & [`SECURITY.md`](SECURITY.md)):**
+  - **Unforgeable 3D Trust Borders (`TrustDomain`):** Modeled after *Qubes OS*, every 3D window is bound to an immutable security domain (`[DOM0 // CORE-VAULT]` Violet, `[TRUSTED // VERIFIED]` Emerald, `[ISOLATED // SANDBOX]` Cyan, `[DISP-RED // QUARANTINE]` Crimson Red) whose outer frame is forcefully rendered by the compositor GPU shader (`fs_window`), preventing visual window spoofing even by compromised client surfaces.
+  - **Inter-Domain Clipboard Vault (`SecureClipboardVault`):** Isolated copy/paste via the compositor's trusted path (`Ctrl+Shift+C` / `Ctrl+Shift+V`) with Mandatory Access Control (blocking untrusted domains from pasting into `CoreVault`) and immediate *single-use auto-wipe*.
+  - **`secureblue` Policies Enforced by Default:** `Xwayland` disabled, automatic media thumbnailers prohibited in the *Spatial File Navigator* (`No-Thumbnails`), third-party shell extensions disabled, *Zero-SUID* (`run0`) enforcement, `#![forbid(unsafe_code)]`, `overflow-checks = true` in `release`, **SHA-256** cryptographic attestation of [`src/shader.wgsl`](src/shader.wgsl) before GPU compilation, and **Instant Sphere Lockdown Mode (`L`)**.
+
+---
+
+## 🎮 Controls & Shortcuts
+
+| Action | Control / Shortcut |
 | :--- | :--- |
-| **Girar a visão 360° na esfera** | Arrastar com **Botão Direito** (ou **Botão Esquerdo** no fundo da esfera) |
-| **Alternar modo *Free-Look* contínuo** | `Espaço` ou `Tab` |
-| **Voar pelo espaço 3D (atravessar códigos Matrix)** | **Roda do Mouse (`Scroll`)** no espaço vazio ou `W`, `A`, `S`, `D` (`Q`/`E` sobe/desce, `Shift` = turbo) |
-| **Mover uma janela na superfície da esfera** | Clicar e arrastar a janela com o **Botão Esquerdo** |
-| **Alterar a profundidade 3D de uma janela ($r$)** | Apontar para a janela (na visão principal ou no Mini-Globo) e usar **`Scroll`** (ou `Shift + Scroll`) |
-| **Girar o Mini-Globo** | Arrastar com o mouse ou usar **`Scroll`** sobre o espaço vazio do Mini-Globo |
-| **Ir para um ponto/janela pelo Mini-Globo** | **Clique Esquerdo** no ponto ou na janela dentro do Mini-Globo |
-| **Expandir / Recolher o Mini-Globo na tela** | **Clique Direito** (ou **Botão do Meio**) sobre o Mini-Globo, ou tecla **`G`** |
-| **Recentralizar no núcleo da esfera `(0, 0, 0)`** | `R` ou `Home` |
-| **Alternar velocidade dos códigos Matrix** | `M` |
-| **Alternar Tela Cheia (*Fullscreen*)** | `F11` ou `F` |
-| **Recolher Mini-Globo / Sair** | `Esc` |
+| **Rotate 360° view inside the sphere** | Drag with **Right Mouse Button** (or **Left Mouse Button** on the background) |
+| **Toggle continuous *Free-Look* mode** | `Space` or `Tab` |
+| **Fly through 3D space (pass through Matrix code)** | **Mouse Wheel (`Scroll`)** on empty space or `W`, `A`, `S`, `D` (`Q`/`E` down/up, `Shift` = boost) |
+| **Move a window across the sphere surface** | Click and drag the window with **Left Mouse Button** |
+| **Adjust a window's 3D radial depth ($r$)** | Hover over the window (in the main view or inside the Mini-Globe) and use **`Scroll`** (or `Shift + Scroll`) |
+| **Rotate the Mini-Globe** | Drag with the mouse or use **`Scroll`** over empty space inside the Mini-Globe |
+| **Jump to a point or window via the Mini-Globe** | **Left Click** on the point or window inside the Mini-Globe |
+| **Expand / Collapse the Mini-Globe on screen** | **Right Click** (or **Middle Click**) on the Mini-Globe, or press **`G`** |
+| **Seal focused window content into Clipboard Vault (Qubes)** | `Ctrl + Shift + C` |
+| **Paste from Clipboard Vault with MAC check + Auto-Wipe** | `Ctrl + Shift + V` |
+| **Toggle Instant Sphere Lockdown Mode (Blank/Encrypt Windows)** | `L` |
+| **Run Live Kernel & Environment Security Audit** | `F12` |
+| **Recenter at the sphere core `(0, 0, 0)`** | `R` or `Home` |
+| **Toggle Matrix code rain speed** | `M` |
+| **Toggle Fullscreen** | `F11` or `F` |
+| **Collapse Mini-Globe / Exit** | `Esc` |
 
 ---
 
-## 🛠️ Arquitetura do Projeto
+## 🛠️ Project Architecture
 
 ```text
 xspherede/
-├── Cargo.toml          # Dependências (wgpu, winit, glam, bytemuck, pollster)
+├── Cargo.toml          # Hardened manifest (unsafe_code = "forbid", overflow-checks, LTO, panic = "abort")
+├── SECURITY.md         # Comprehensive security architecture & policies (secureblue, Qubes OS, GrapheneOS)
 └── src/
-    ├── main.rs         # Inicialização wgpu/winit, loop de eventos e pipelines de renderização
-    ├── camera.rs       # Câmera 3D espacial (SphereCamera), interpolação suave e raycasting NDC
-    ├── minimap.rs      # Mini-Globo 3D interativo e expansível (MiniGlobeHud)
-    ├── sphere_env.rs   # Geração da grade geodésica SphereXP e do volume 3D de códigos Matrix
-    ├── window3d.rs     # Janelas 3D curvas (SphericalWindow), raycasting esférico e trait WindowSurfaceProvider
-    └── shader.wgsl     # Shaders WGSL (grade esférica, glifos Matrix volumétricos + campo limpo, janelas 3D)
+    ├── main.rs         # wgpu/winit initialization, event loop, Lockdown mode, and render pipelines
+    ├── camera.rs       # 3D spatial camera (SphereCamera), smooth damping, and NDC raycasting
+    ├── minimap.rs      # Interactive and expandable 3D Mini-Globe HUD (MiniGlobeHud)
+    ├── security.rs     # Security engine: TrustDomain, SecureClipboardVault, SHA-256, kernel/env audit
+    ├── sphere_env.rs   # SphereXP geodesic grid and 3D Matrix code volume generation
+    ├── window3d.rs     # Curved 3D windows (SphericalWindow), spherical raycasting, and WindowSurfaceProvider trait
+    └── shader.wgsl     # WGSL shaders (spherical grid, volumetric Matrix glyphs, unforgeable 3D domain borders)
 ```
 
 ---
 
-## 🚀 Como Compilar e Executar
+## 🚀 Building & Running
 
-### Pré-requisitos
+### Prerequisites
 - **Rust** (`rustup`, `cargo`, `rustc` 1.80+)
-- Drivers gráficos com suporte a **Vulkan** ou **OpenGL / GLES** no Linux (Wayland ou X11), Windows ou macOS.
+- Graphics drivers with **Vulkan**, **Metal**, **DX12**, or **OpenGL / GLES** support on Linux (Wayland or X11), Windows, or macOS.
 
-### Executando em modo otimizado (`release`)
+### Run in optimized release mode
 
 ```bash
 git clone https://github.com/mendsec/xspherede.git
@@ -80,16 +90,22 @@ cargo run --release
 
 ## 🗺️ Roadmap
 
-- [x] Esfera 3D wireframe estilo SphereXP com navegação 360° e voo espacial.
-- [x] Shader volumétrico 3D de código Matrix com Campo de Visão Limpa Mínimo e escudo por janela.
-- [x] Janelas 3D curvas com *raycasting* esférico, arraste em $(\theta, \phi)$ e ajuste de profundidade radial ($r$).
-- [x] Mini-Globo 3D interativo e expansível no centro da tela com janelas em profundidade real.
-- [ ] Captura de janelas reais no Linux via PipeWire / XComposite implementando `WindowSurfaceProvider`.
-- [ ] Ícones de atalho 3D flutuantes e *dock* polar nos anéis superior/inferior da esfera.
-- [ ] Integração com **Smithay** para execução como sessão de compositor Wayland nativa com texturas zero-copy (`DMA-BUF`).
+- [x] SphereXP-style 3D wireframe sphere with 360° navigation and spatial flight.
+- [x] 3D volumetric Matrix code shader with Minimum Clear Field of View and per-window angular shield.
+- [x] Curved 3D windows with spherical raycasting, $(\theta, \phi)$ dragging, and radial depth ($r$) adjustment.
+- [x] Interactive 3D Mini-Globe expandable to the center of the screen with windows rendered at true radial depth.
+- [ ] Live Linux window capture via PipeWire / XComposite implementing `WindowSurfaceProvider`.
+- [ ] Floating 3D desktop shortcut icons and polar docks on the upper/lower sphere rings.
+- [ ] **Smithay** integration to run as a native Wayland compositor session with zero-copy textures (`DMA-BUF`).
 
 ---
 
-## 📄 Licença
+## 🛡️ Security
 
-Distribuído sob a licença **MIT**. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+Please do **not** open public GitHub issues for security vulnerabilities. Refer to [SECURITY.md](SECURITY.md) for private reporting instructions.
+
+---
+
+## 📄 License
+
+Distributed under the **MIT** License. See [LICENSE](LICENSE) for details.

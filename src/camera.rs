@@ -1,8 +1,8 @@
 use glam::{Mat4, Vec3};
 
-/// Câmera 3D espacial do XSphereDE.
-/// Permite tanto girar a visão em 360 graus dentro da esfera quanto
-/// navegar fisicamente pelo volume 3D (atravessando as fileiras de código Matrix).
+/// 3D spatial camera for XSphereDE.
+/// Allows both 360-degree spherical view rotation inside the sphere and
+/// free 3D spatial navigation (flying through the volumetric Matrix code corridors).
 pub struct SphereCamera {
     pub position: Vec3,
     pub target_position: Vec3,
@@ -37,53 +37,53 @@ impl SphereCamera {
         self.aspect = (width.max(1) as f32) / (height.max(1) as f32);
     }
 
-    /// Direção para onde a câmera está olhando no espaço 3D.
+    /// Forward direction vector where the camera is looking in 3D space.
     pub fn forward(&self) -> Vec3 {
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         let (sin_pitch, cos_pitch) = self.pitch.sin_cos();
         Vec3::new(sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch).normalize()
     }
 
-    /// Vetor direita da câmera no plano horizontal.
+    /// Camera right vector on the horizontal plane.
     pub fn right(&self) -> Vec3 {
         let (sin_yaw, cos_yaw) = self.yaw.sin_cos();
         Vec3::new(cos_yaw, 0.0, sin_yaw).normalize()
     }
 
-    /// Vetor cima relativo à orientação da câmera.
+    /// Up vector relative to the camera orientation.
     pub fn up(&self) -> Vec3 {
         self.right().cross(self.forward()).normalize()
     }
 
-    /// Rotaciona a câmera suavemente com base no delta do mouse.
+    /// Smoothly rotates the camera based on mouse delta.
     pub fn rotate(&mut self, delta_x: f32, delta_y: f32, sensitivity: f32) {
         self.target_yaw += delta_x * sensitivity;
         self.target_pitch = (self.target_pitch - delta_y * sensitivity)
             .clamp(-85.0_f32.to_radians(), 85.0_f32.to_radians());
     }
 
-    /// Move a câmera pelo espaço 3D interno da esfera (permitindo atravessar as colunas Matrix).
+    /// Moves the camera through the internal 3D space of the sphere (flying through Matrix columns).
     pub fn translate_local(&mut self, forward_delta: f32, right_delta: f32, up_delta: f32) {
         let movement = self.forward() * forward_delta
             + self.right() * right_delta
             + self.up() * up_delta;
         self.target_position += movement;
 
-        // Mantém o usuário dentro do limite da esfera principal (raio ~26.0)
+        // Keep the user within the main sphere boundary (radius ~26.0)
         let max_radius = 22.0;
         if self.target_position.length() > max_radius {
             self.target_position = self.target_position.normalize() * max_radius;
         }
     }
 
-    /// Retorna suavemente para o centro da esfera.
+    /// Smoothly returns to the center of the sphere.
     pub fn reset_to_center(&mut self) {
         self.target_position = Vec3::ZERO;
         self.target_pitch = 0.0;
     }
 
-    /// Direciona suavemente a câmera principal para uma coordenada esférica (azimuth, elevation)
-    /// escolhendo sempre o menor caminho angular (sem dar uma volta desnecessária de 360°).
+    /// Smoothly directs the main camera toward a spherical coordinate `(azimuth, elevation)`,
+    /// always choosing the shortest angular path (avoiding unnecessary 360-degree spins).
     pub fn look_at_spherical(&mut self, target_azimuth: f32, target_elevation: f32) {
         let mut diff_yaw = target_azimuth - self.yaw;
         while diff_yaw > std::f32::consts::PI {
@@ -96,7 +96,7 @@ impl SphereCamera {
         self.target_pitch = target_elevation.clamp(-85.0_f32.to_radians(), 85.0_f32.to_radians());
     }
 
-    /// Atualiza interpolação suave (damping) a cada frame.
+    /// Updates smooth damping interpolation each frame.
     pub fn update(&mut self, dt: f32) {
         let smoothing = (14.0 * dt).clamp(0.0, 1.0);
         self.yaw += (self.target_yaw - self.yaw) * smoothing;
@@ -116,7 +116,7 @@ impl SphereCamera {
         self.proj_matrix() * self.view_matrix()
     }
 
-    /// Gera um raio 3D (origem, direção unitária) a partir de coordenadas normalizadas de tela [-1, 1].
+    /// Generates a 3D ray `(origin, unit_direction)` from normalized device coordinates `[-1, 1]`.
     pub fn screen_ray(&self, ndc_x: f32, ndc_y: f32) -> (Vec3, Vec3) {
         let inv_vp = self.view_proj_matrix().inverse();
         let near_point = inv_vp.project_point3(Vec3::new(ndc_x, ndc_y, 0.0));

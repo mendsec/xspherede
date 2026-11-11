@@ -17,15 +17,15 @@ pub struct MatrixVertex {
     pub params: [f32; 4],
 }
 
-/// Gera as linhas da grade esférica inspirada no SphereXP clássico.
+/// Generates the spherical grid lines inspired by classic SphereXP.
 pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<GridVertex> {
     let mut vertices = Vec::new();
     let segments = 96_u32;
 
-    // 1. Paralelos (linhas horizontais de latitude)
+    // 1. Parallels (horizontal latitude lines)
     for p in 1..parallels {
         let frac = (p as f32) / (parallels as f32);
-        let phi = (frac - 0.5) * PI; // -PI/2 a +PI/2
+        let phi = (frac - 0.5) * PI; // -PI/2 to +PI/2
         let y = radius * phi.sin();
         let ring_r = radius * phi.cos();
 
@@ -33,9 +33,9 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
         let is_polar_ring = p == 1 || p == parallels - 1;
 
         let color = if is_equator {
-            [0.15, 0.95, 0.45, 0.55] // Equador Matrix brilhante
+            [0.15, 0.95, 0.45, 0.55] // Bright Matrix equator
         } else if is_polar_ring {
-            [0.25, 1.0, 0.65, 0.70] // Anel polar clássico do SphereXP
+            [0.25, 1.0, 0.65, 0.70] // Classic SphereXP polar ring
         } else {
             [0.05, 0.55, 0.22, 0.24]
         };
@@ -52,7 +52,7 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
         }
     }
 
-    // 2. Meridianos (linhas verticais de longitude ligando os polos)
+    // 2. Meridians (vertical longitude lines connecting the poles)
     for m in 0..meridians {
         let theta = (m as f32 / meridians as f32) * TAU;
         let is_cardinal = m % (meridians / 4).max(1) == 0;
@@ -62,7 +62,7 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
             [0.04, 0.48, 0.18, 0.20]
         };
 
-        // Corta próximo às tampas polares para manter o visual clássico do SphereXP
+        // Trim near the polar caps to preserve the classic SphereXP look
         let min_phi = -0.44 * PI;
         let max_phi = 0.44 * PI;
 
@@ -91,7 +91,7 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
     vertices
 }
 
-/// Gera um gerador pseudo-aleatório determinístico leve (xorshift32).
+/// Lightweight deterministic pseudo-random number generator (`xorshift32`).
 fn next_rand(state: &mut u32) -> f32 {
     let mut x = *state;
     x ^= x << 13;
@@ -101,13 +101,13 @@ fn next_rand(state: &mut u32) -> f32 {
     (x as f32) / (u32::MAX as f32)
 }
 
-/// Gera as fileiras tridimensionais (volumétricas) de código Matrix dentro da esfera,
-/// além da parede esférica externa de códigos, permitindo que o usuário passe por entre
-/// os corredores de código ao dar zoom ou caminhar pelo espaço 3D.
+/// Generates 3D volumetric Matrix code ribbons inside the sphere,
+/// along with the outer spherical code curtain, allowing the user to fly through
+/// the code corridors when zooming or moving through 3D space.
 pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let mut rng = 0x1999_0331_u32; // Ano de lançamento do filme Matrix :)
+    let mut rng = 0x1999_0331_u32; // Release date of The Matrix film :)
 
     let mut push_ribbon = |center_x: f32,
                            center_y: f32,
@@ -152,7 +152,7 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
             params,
         });
 
-        // Dupla face para ser visível de qualquer ângulo quando a câmera atravessar as fileiras
+        // Double-sided geometry so ribbons remain visible from any angle when flying through
         indices.extend_from_slice(&[
             base_idx,
             base_idx + 1,
@@ -169,13 +169,13 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
         ]);
     };
 
-    // 1. Fileiras volumétricas distribuídas além do Raio de Visão Limpa das janelas (r >= 12.5)
-    // Garante uma zona central limpa para uso das janelas, mantendo profundidade 3D ao redor e ao fundo.
+    // 1. Volumetric columns distributed beyond the Window Clear Field of View radius (r >= 12.5).
+    // Guarantees a clean central workspace for windows while preserving 3D depth around and behind them.
     let total_volumetric_columns = 320;
     let min_clear_radius = 12.5;
     for i in 0..total_volumetric_columns {
         let r_frac = next_rand(&mut rng);
-        // Distribui entre min_clear_radius (12.5) e (sphere_radius - 1.2)
+        // Distribute between min_clear_radius (12.5) and (sphere_radius - 1.2)
         let dist = min_clear_radius + r_frac.sqrt() * (sphere_radius - min_clear_radius - 1.2);
         let angle = (i as f32 / total_volumetric_columns as f32) * TAU
             + (next_rand(&mut rng) - 0.5) * 0.25;
@@ -191,7 +191,7 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
         let glyphs_y = (half_h * 5.0).round();
         let alpha_boost = 0.75 + next_rand(&mut rng) * 0.45;
 
-        // Orienta a fita perpendicularmente ao raio (ou em grade Matrix)
+        // Orient the ribbon perpendicular to the radial vector
         push_ribbon(
             cx,
             cy,
@@ -206,7 +206,7 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
         );
     }
 
-    // 2. Cortina esférica externa densa (o "papel de parede" Matrix envolvendo toda a esfera)
+    // 2. Dense outer spherical curtain (the Matrix "wallpaper" wrapping the entire sphere)
     let outer_columns = 180;
     let outer_r = sphere_radius * 0.985;
     for i in 0..outer_columns {

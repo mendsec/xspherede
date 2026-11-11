@@ -1,9 +1,12 @@
 [package]
 name = "xspherede"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-description = "XSphereDE - Ambiente Desktop 3D Esférico inspirado no SphereXP com efeito Matrix volumétrico"
+description = "XSphereDE - Hardened 3D Spherical Desktop Environment in Rust + wgpu (secureblue & Qubes OS security policies)"
 license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
 
 [dependencies]
 bytemuck = { version = "1.21", features = ["derive"] }
@@ -13,3 +16,15 @@ log = "0.4"
 pollster = "0.4"
 wgpu = "24.0"
 winit = "0.30"
+
+# Hardened compilation profiles (inspired by secureblue / GrapheneOS / Hardened Gentoo)
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+overflow-checks = true
+panic = "abort"
+strip = "symbols"
