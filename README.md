@@ -8,6 +8,10 @@
 [![unsafe: forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
 [![Status: prototype](https://img.shields.io/badge/status-prototype-yellow.svg)](#project-status)
 
+![XSphereDE prototype: three curved windows with colored trust-domain borders inside the sphere, surrounded by volumetric code rain, with the Mini-Globe overview in the bottom-right corner](docs/screenshot.webp)
+
+*The v0.0.1 prototype: demo windows in three trust domains, with the Mini-Globe overview in the corner.*
+
 XSphereDE places you at the center of a 360° sphere. Windows are curved meshes that sit on the sphere at a position and depth $(\theta, \phi, r)$, and every window carries a compositor-drawn border that tells you which trust domain it belongs to. It revives the idea behind the classic SphereXP desktop and asks what it would look like if it were built today: memory-safe, GPU-native, Wayland-first, and with isolation as a visible, first-class concept instead of an afterthought.
 
 ---
@@ -143,6 +147,7 @@ cargo test --locked
 xspherede/
 ├── Cargo.toml          # Manifest and hardened build profiles
 ├── Cargo.lock          # Pinned dependency graph
+├── docs/               # Screenshots and media
 └── src/
     ├── main.rs         # wgpu / winit setup, event loop, render pipelines, lockdown mode
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting
