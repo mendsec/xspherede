@@ -1,0 +1,15 @@
+[package]
+name = "xspherede"
+version = "0.1.0"
+edition = "2021"
+description = "XSphereDE - Ambiente Desktop 3D Esférico inspirado no SphereXP com efeito Matrix volumétrico"
+license = "MIT"
+
+[dependencies]
+bytemuck = { version = "1.21", features = ["derive"] }
+env_logger = "0.11"
+glam = "0.29"
+log = "0.4"
+pollster = "0.4"
+wgpu = "24.0"
+winit = "0.30"
