@@ -50,7 +50,9 @@ struct WindowRenderEntry {
 
 struct XSphereRenderer {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    /// `None` only between losing the surface and successfully recreating it.
+    surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -684,7 +686,8 @@ impl XSphereRenderer {
         let now = Instant::now();
         Self {
             window,
-            surface,
+            instance,
+            surface: Some(surface),
             device,
             queue,
             config,
@@ -731,7 +734,9 @@ impl XSphereRenderer {
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(surface) = &self.surface {
+                surface.configure(&self.device, &self.config);
+            }
             self.depth_view =
                 Self::create_depth_view(&self.device, new_size.width, new_size.height);
             self.camera.resize(new_size.width, new_size.height);
@@ -978,14 +983,38 @@ impl XSphereRenderer {
         );
     }
 
+    /// Replaces a lost surface with a new one for the same window and configures it.
+    ///
+    /// The old surface is dropped first, because a window can back only one surface
+    /// at a time. On failure `self.surface` stays `None` and `render` retries on the
+    /// next frame.
+    fn recreate_surface(&mut self) {
+        drop(self.surface.take());
+        match self.instance.create_surface(self.window.clone()) {
+            Ok(surface) => {
+                surface.configure(&self.device, &self.config);
+                self.surface = Some(surface);
+            }
+            Err(e) => log::debug!("Surface recreation failed, will retry: {e}"),
+        }
+    }
+
     /// Renders one frame. Returns `true` when the surface must be reconfigured
     /// before the next frame.
     fn render(&mut self) -> bool {
-        let (output, needs_reconfigure) = match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else {
+            // The surface was lost and could not be recreated yet: try again this frame.
+            self.recreate_surface();
+            return false;
+        };
+        let (output, needs_reconfigure) = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                return true;
+            wgpu::CurrentSurfaceTexture::Outdated => return true,
+            wgpu::CurrentSurfaceTexture::Lost => {
+                log::warn!("Surface lost; recreating it");
+                self.recreate_surface();
+                return false;
             }
             // Nothing to draw to right now: skip this frame and try again on the next one.
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {

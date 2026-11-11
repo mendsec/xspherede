@@ -17,6 +17,10 @@ All notable changes to this project are documented in this file. The format foll
 - Minimum supported Rust version declared as 1.88.
 - Updated `glam` to 0.34, `wgpu` to 30, and `pollster` to 1.0.
 
+### Fixed
+
+- A lost rendering surface is now recreated instead of only being reconfigured.
+
 ## [0.0.1]
 
 ### Added
