@@ -47,8 +47,14 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
             let p0 = [ring_r * t0.sin(), y, -ring_r * t0.cos()];
             let p1 = [ring_r * t1.sin(), y, -ring_r * t1.cos()];
 
-            vertices.push(GridVertex { position: p0, color });
-            vertices.push(GridVertex { position: p1, color });
+            vertices.push(GridVertex {
+                position: p0,
+                color,
+            });
+            vertices.push(GridVertex {
+                position: p1,
+                color,
+            });
         }
     }
 
@@ -83,8 +89,14 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
                 -radius * phi1.cos() * theta.cos(),
             ];
 
-            vertices.push(GridVertex { position: p0, color });
-            vertices.push(GridVertex { position: p1, color });
+            vertices.push(GridVertex {
+                position: p0,
+                color,
+            });
+            vertices.push(GridVertex {
+                position: p1,
+                color,
+            });
         }
     }
 
@@ -177,8 +189,8 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
         let r_frac = next_rand(&mut rng);
         // Distribute between min_clear_radius (12.5) and (sphere_radius - 1.2)
         let dist = min_clear_radius + r_frac.sqrt() * (sphere_radius - min_clear_radius - 1.2);
-        let angle = (i as f32 / total_volumetric_columns as f32) * TAU
-            + (next_rand(&mut rng) - 0.5) * 0.25;
+        let angle =
+            (i as f32 / total_volumetric_columns as f32) * TAU + (next_rand(&mut rng) - 0.5) * 0.25;
 
         let cx = dist * angle.sin();
         let cz = -dist * angle.cos();
@@ -220,16 +232,7 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
         let glyphs_y = 48.0;
 
         push_ribbon(
-            cx,
-            0.0,
-            cz,
-            half_w,
-            half_h,
-            angle,
-            seed,
-            speed,
-            glyphs_y,
-            1.1,
+            cx, 0.0, cz, half_w, half_h, angle, seed, speed, glyphs_y, 1.1,
         );
     }
 

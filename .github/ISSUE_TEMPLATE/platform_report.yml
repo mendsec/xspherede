@@ -1,0 +1,39 @@
+name: Platform report
+description: Tell us whether XSphereDE builds and runs on your system. Both successes and failures help.
+labels: [platform]
+body:
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Builds and runs correctly
+        - Builds, runs with problems
+        - Builds, does not start
+        - Does not build
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and session
+      placeholder: OpenBSD 7.8 X11, Alpine 3.22 Wayland (sway), ...
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU, driver, and backend
+      placeholder: Intel Arc A380, Mesa 25.2, Vulkan
+    validations:
+      required: true
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      placeholder: Output of `rustc --version`
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Extra packages you needed, workarounds, errors, or log output.

@@ -109,11 +109,7 @@ impl XSphereRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
     const SPHERE_RADIUS: f32 = 26.0;
 
-    fn create_depth_view(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-    ) -> wgpu::TextureView {
+    fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("XSphereDE Depth Buffer"),
             size: wgpu::Extent3d {
@@ -177,7 +173,10 @@ impl XSphereRenderer {
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
 
-        let present_mode = if surface_caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+        let present_mode = if surface_caps
+            .present_modes
+            .contains(&wgpu::PresentMode::Mailbox)
+        {
             wgpu::PresentMode::Mailbox
         } else {
             wgpu::PresentMode::Fifo
@@ -208,8 +207,9 @@ impl XSphereRenderer {
 
         let shader_source = include_str!("shader.wgsl");
         if security_policy.verify_shader_integrity {
-            let digest = verify_shader_source_integrity(shader_source)
-                .expect("CRITICAL SECURITY ALERT: WGSL shader cryptographic integrity check failed");
+            let digest = verify_shader_source_integrity(shader_source).expect(
+                "CRITICAL SECURITY ALERT: WGSL shader cryptographic integrity check failed",
+            );
             log::info!(
                 "Verified WGSL shader SHA-256 cryptographic integrity: {}",
                 digest
@@ -1033,10 +1033,7 @@ impl XSphereRenderer {
             for entry in &self.windows {
                 rpass.set_bind_group(1, &entry.win.bind_group, &[]);
                 rpass.set_vertex_buffer(0, entry.win.vertex_buffer.slice(..));
-                rpass.set_index_buffer(
-                    entry.win.index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint32,
-                );
+                rpass.set_index_buffer(entry.win.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 rpass.draw_indexed(0..entry.win.index_count, 0, 0..1);
             }
 
@@ -1151,7 +1148,9 @@ impl ApplicationHandler for XSphereApp {
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + C (Copy to Vault)
                                 KeyCode::KeyC if renderer.ctrl_held && renderer.shift_held => {
                                     if renderer.lockdown_active {
-                                        log::warn!("[SECURITY] Clipboard copy blocked: Lockdown active");
+                                        log::warn!(
+                                            "[SECURITY] Clipboard copy blocked: Lockdown active"
+                                        );
                                     } else if let Some(idx) = renderer.focused_window {
                                         let win = &renderer.windows[idx].win;
                                         renderer.clipboard_vault.seal_from_window(
@@ -1171,7 +1170,9 @@ impl ApplicationHandler for XSphereApp {
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + V (Paste & Auto-Wipe)
                                 KeyCode::KeyV if renderer.ctrl_held && renderer.shift_held => {
                                     if renderer.lockdown_active {
-                                        log::warn!("[SECURITY] Clipboard paste blocked: Lockdown active");
+                                        log::warn!(
+                                            "[SECURITY] Clipboard paste blocked: Lockdown active"
+                                        );
                                     } else if let Some(idx) = renderer.focused_window {
                                         let dest_win = &renderer.windows[idx].win;
                                         match renderer
@@ -1190,7 +1191,10 @@ impl ApplicationHandler for XSphereApp {
                                                 renderer.window.set_title(&msg);
                                             }
                                             Err(violation) => {
-                                                let msg = format!("XSphereDE [SECURITY ALERT] — {}", violation);
+                                                let msg = format!(
+                                                    "XSphereDE [SECURITY ALERT] — {}",
+                                                    violation
+                                                );
                                                 log::warn!("{}", msg);
                                                 renderer.window.set_title(&msg);
                                             }
@@ -1220,9 +1224,10 @@ impl ApplicationHandler for XSphereApp {
                                     );
                                     let summary = report.summary_line();
                                     log::info!("[SECURITY AUDIT] {}", summary);
-                                    renderer
-                                        .window
-                                        .set_title(&format!("XSphereDE [SECURITY AUDIT] — {}", summary));
+                                    renderer.window.set_title(&format!(
+                                        "XSphereDE [SECURITY AUDIT] — {}",
+                                        summary
+                                    ));
                                 }
                                 KeyCode::KeyG => {
                                     renderer.minimap.toggle_expanded();
@@ -1236,12 +1241,12 @@ impl ApplicationHandler for XSphereApp {
                                     renderer.minimap.target_orb_pitch = 0.32;
                                 }
                                 KeyCode::KeyM => {
-                                    renderer.matrix_speed_mult =
-                                        if renderer.matrix_speed_mult > 0.2 {
-                                            0.15
-                                        } else {
-                                            1.0
-                                        };
+                                    renderer.matrix_speed_mult = if renderer.matrix_speed_mult > 0.2
+                                    {
+                                        0.15
+                                    } else {
+                                        1.0
+                                    };
                                 }
                                 KeyCode::F11 | KeyCode::KeyF => {
                                     let is_fs = renderer.window.fullscreen().is_some();

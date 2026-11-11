@@ -6,6 +6,10 @@
 | ------- | ------------------ |
 | 0.0.x   | :white_check_mark: |
 
+## Scope
+
+XSphereDE is an early prototype and does not yet provide an isolation boundary; see the project status section of the [README](README.md#project-status). Reports are still welcome for any defect in the security engine, input handling, surface validation, rendering pipeline, build configuration, or dependency chain.
+
 ## Reporting a Vulnerability
 
 We take the security of **XSphereDE** seriously. If you discover a security vulnerability, please **do not** report it via public GitHub issues, discussions, or pull requests.
