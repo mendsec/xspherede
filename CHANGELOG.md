@@ -20,6 +20,7 @@ All notable changes to this project are documented in this file. The format foll
 ### Fixed
 
 - A lost rendering surface is now recreated instead of only being reconfigured.
+- A lost GPU device no longer leaves the renderer unusable: all GPU resources are rebuilt on a new device and the session (camera, window placement, Mini-Globe, lockdown, clipboard vault) carries over.
 
 ## [0.0.1]
 
