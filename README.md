@@ -80,8 +80,8 @@ These are the mechanisms implemented in [`src/security.rs`](src/security.rs) and
 | Platform | Status |
 | :--- | :--- |
 | Linux (Wayland, X11) | Primary development target |
-| FreeBSD | Expected to work through Vulkan or GLES; compile-checked in CI as an experimental job. Reports welcome |
-| OpenBSD, NetBSD, DragonFly BSD | Untested. Reports and patches welcome |
+| FreeBSD, NetBSD | Compiles: cross-checked in CI on every change. Not yet tested at run time; expected to work through Vulkan or GLES. Reports welcome |
+| OpenBSD, DragonFly BSD | Untested. Reports and patches welcome |
 | Windows, macOS | Should run through `wgpu` and `winit`; not a project focus |
 
 If you run XSphereDE on a BSD or an unusual GPU and driver combination, please open an issue with the result, whether it worked or not.
