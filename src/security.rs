@@ -408,10 +408,12 @@ pub const DANGEROUS_ENV_VARS: &[&str] = &[
 pub struct SecurityAuditReport {
     pub policy_enforced: bool,
     pub hardened_malloc_active: bool,
-    pub yama_ptrace_scope: u8,
-    pub kptr_restrict: u8,
-    pub dmesg_restrict: u8,
-    pub no_new_privs: bool,
+    /// Linux-specific kernel settings. `None` means the host does not expose the
+    /// setting (for example on the BSDs), not that it holds a weak value.
+    pub yama_ptrace_scope: Option<u8>,
+    pub kptr_restrict: Option<u8>,
+    pub dmesg_restrict: Option<u8>,
+    pub no_new_privs: Option<bool>,
     pub xwayland_blocked: bool,
     pub thumbnailers_disabled: bool,
     pub extensions_disabled: bool,
@@ -420,13 +422,15 @@ pub struct SecurityAuditReport {
 }
 
 impl SecurityAuditReport {
-    /// Performs a non-intrusive, 100% memory-safe security audit of the Linux host and DE session.
+    /// Performs a non-intrusive, 100% memory-safe security audit of the host and DE session.
+    ///
+    /// The kernel settings are read from Linux `procfs`. On hosts without those files
+    /// they are reported as not available instead of being assumed to be zero.
     pub fn run_audit(policy: &SecurityPolicy, shader_source: &str) -> Self {
         let hardened_malloc_active = Self::detect_hardened_malloc();
-        let yama_ptrace_scope =
-            Self::read_sysctl_u8("/proc/sys/kernel/yama/ptrace_scope").unwrap_or(0);
-        let kptr_restrict = Self::read_sysctl_u8("/proc/sys/kernel/kptr_restrict").unwrap_or(0);
-        let dmesg_restrict = Self::read_sysctl_u8("/proc/sys/kernel/dmesg_restrict").unwrap_or(0);
+        let yama_ptrace_scope = Self::read_sysctl_u8("/proc/sys/kernel/yama/ptrace_scope");
+        let kptr_restrict = Self::read_sysctl_u8("/proc/sys/kernel/kptr_restrict");
+        let dmesg_restrict = Self::read_sysctl_u8("/proc/sys/kernel/dmesg_restrict");
         let no_new_privs = Self::detect_no_new_privs();
         let shader_sha256_hex = sha256_hex(shader_source.as_bytes());
 
@@ -466,15 +470,17 @@ impl SecurityAuditReport {
         false
     }
 
-    fn detect_no_new_privs() -> bool {
-        if let Ok(status) = fs::read_to_string("/proc/self/status") {
-            for line in status.lines() {
-                if let Some(rest) = line.strip_prefix("NoNewPrivs:") {
-                    return rest.trim() == "1";
-                }
-            }
-        }
-        false
+    fn detect_no_new_privs() -> Option<bool> {
+        let status = fs::read_to_string("/proc/self/status").ok()?;
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix("NoNewPrivs:"))
+            .map(|rest| rest.trim() == "1")
+    }
+
+    /// Formats an optional host setting, using `n/a` when the host does not expose it.
+    fn display_setting<T: ToString>(value: Option<T>) -> String {
+        value.map_or_else(|| "n/a".to_string(), |v| v.to_string())
     }
 
     fn read_sysctl_u8(path: &str) -> Option<u8> {
@@ -490,10 +496,10 @@ impl SecurityAuditReport {
             if self.xwayland_blocked { "OFF" } else { "ON" },
             if self.thumbnailers_disabled { "OFF" } else { "ON" },
             if self.extensions_disabled { "OFF" } else { "ON" },
-            self.yama_ptrace_scope,
-            self.kptr_restrict,
-            self.dmesg_restrict,
-            if self.no_new_privs { "1" } else { "0" },
+            Self::display_setting(self.yama_ptrace_scope),
+            Self::display_setting(self.kptr_restrict),
+            Self::display_setting(self.dmesg_restrict),
+            Self::display_setting(self.no_new_privs.map(u8::from)),
             if self.hardened_malloc_active { "ACTIVE" } else { "HOST-DEFAULT" },
             short_hash
         )
@@ -623,6 +629,22 @@ mod tests {
             sha256_hex(b"abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn test_audit_summary_marks_unavailable_host_settings() {
+        let policy = SecurityPolicy::maximum_hardened();
+        let mut report = SecurityAuditReport::run_audit(&policy, "");
+        report.yama_ptrace_scope = None;
+        report.kptr_restrict = Some(2);
+        report.dmesg_restrict = None;
+        report.no_new_privs = Some(true);
+
+        let summary = report.summary_line();
+        assert!(summary.contains("ptrace: n/a"));
+        assert!(summary.contains("kptr: 2"));
+        assert!(summary.contains("dmesg: n/a"));
+        assert!(summary.contains("NoNewPrivs: 1"));
     }
 
     #[test]

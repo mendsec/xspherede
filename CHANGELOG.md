@@ -6,7 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
-- Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD and NetBSD.
+- Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD, NetBSD, and OpenBSD.
+- OpenBSD build and run instructions in the README.
 - Contribution guide, code of conduct, issue forms, and pull request template.
 - `Cargo.lock` is now tracked for reproducible builds.
 - Screenshot of the prototype in the README.
@@ -15,6 +16,7 @@ All notable changes to this project are documented in this file. The format foll
 
 - README rewritten with an explicit project status, platform support table, and roadmap.
 - Minimum supported Rust version declared as 1.88.
+- The host audit reports Linux-specific kernel settings as `n/a` on systems that do not expose them, instead of `0`.
 
 ## [0.0.1]
 

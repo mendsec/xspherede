@@ -6,7 +6,6 @@ rust-version = "1.88"
 description = "Spherical 3D desktop environment prototype in safe Rust and wgpu, designed around explicit trust domains"
 license = "MIT"
 repository = "https://github.com/mendsec/xspherede"
-homepage = "https://github.com/mendsec/xspherede"
 readme = "README.md"
 keywords = ["desktop-environment", "compositor", "wgpu", "wayland", "security"]
 categories = ["graphics", "gui", "rendering"]
