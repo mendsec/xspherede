@@ -15,8 +15,9 @@ use security::{
 };
 use sphere_env::{generate_matrix_code_volume, generate_sphere_grid, GridVertex, MatrixVertex};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 use window3d::{generate_demo_window_rgba, SphericalWindow, WindowVertex};
 use winit::application::ApplicationHandler;
@@ -54,6 +55,9 @@ struct XSphereRenderer {
     /// `None` only between losing the surface and successfully recreating it.
     surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
+    /// Set by wgpu when the device is lost. Every GPU resource in this renderer is
+    /// then invalid and the renderer must be rebuilt (see `XSphereApp::recover_from_device_loss`).
+    device_lost: Arc<AtomicBool>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
@@ -129,7 +133,11 @@ impl XSphereRenderer {
         texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    async fn new(window: Arc<Window>) -> Self {
+    /// Builds the renderer and every GPU resource it owns for `window`.
+    ///
+    /// Returns an error when the GPU cannot be initialized (no surface, adapter, or
+    /// device). Security invariant failures still abort.
+    async fn new(window: Arc<Window>) -> Result<Self, String> {
         let size = window.inner_size();
         let width = size.width.max(1);
         let height = size.height.max(1);
@@ -141,7 +149,7 @@ impl XSphereRenderer {
 
         let surface = instance
             .create_surface(window.clone())
-            .expect("Failed to create wgpu surface");
+            .map_err(|e| format!("Failed to create wgpu surface: {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -151,7 +159,7 @@ impl XSphereRenderer {
                 apply_limit_buckets: false,
             })
             .await
-            .expect("No compatible GPU adapter found");
+            .map_err(|e| format!("No compatible GPU adapter found: {e}"))?;
 
         let adapter_info = adapter.get_info();
         log::info!(
@@ -170,7 +178,16 @@ impl XSphereRenderer {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Failed to initialize graphics device");
+            .map_err(|e| format!("Failed to initialize graphics device: {e}"))?;
+
+        let device_lost = Arc::new(AtomicBool::new(false));
+        {
+            let device_lost = device_lost.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                log::error!("GPU device lost ({reason:?}): {message}");
+                device_lost.store(true, Ordering::Release);
+            });
+        }
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -689,11 +706,12 @@ impl XSphereRenderer {
         }
 
         let now = Instant::now();
-        Self {
+        Ok(Self {
             window,
             instance,
             surface: Some(surface),
             device,
+            device_lost,
             queue,
             config,
             depth_view,
@@ -732,7 +750,49 @@ impl XSphereRenderer {
             dragging_window: None,
             minimap_dragging: false,
             minimap_drag_distance: 0.0,
+        })
+    }
+
+    /// Carries the session over from `previous` into this freshly built renderer:
+    /// camera, window placement, Mini-Globe, security state, and input state.
+    ///
+    /// GPU resources are not carried over; this renderer keeps the ones it created.
+    fn adopt_session_state(&mut self, previous: XSphereRenderer) {
+        self.camera = previous.camera;
+        self.minimap = previous.minimap;
+
+        for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
+            entry.win.azimuth = old.win.azimuth;
+            entry.win.elevation = old.win.elevation;
+            entry.win.radius = old.win.radius;
+            entry.win.angular_width = old.win.angular_width;
+            entry.win.angular_height = old.win.angular_height;
+            entry.win.hovered = old.win.hovered;
+            entry.win.focused = old.win.focused;
+            entry.win.update_geometry(&self.queue);
         }
+
+        self.security_policy = previous.security_policy;
+        self.clipboard_vault = previous.clipboard_vault;
+        self.lockdown_active = previous.lockdown_active;
+
+        self.start_time = previous.start_time;
+        self.last_frame = previous.last_frame;
+        self.matrix_speed_mult = previous.matrix_speed_mult;
+
+        self.cursor_pos = previous.cursor_pos;
+        self.last_cursor_pos = previous.last_cursor_pos;
+        self.right_mouse_down = previous.right_mouse_down;
+        self.left_mouse_down = previous.left_mouse_down;
+        self.free_look_mode = previous.free_look_mode;
+        self.shift_held = previous.shift_held;
+        self.ctrl_held = previous.ctrl_held;
+        self.keys_pressed = previous.keys_pressed;
+        self.hovered_window = previous.hovered_window;
+        self.focused_window = previous.focused_window;
+        self.dragging_window = previous.dragging_window;
+        self.minimap_dragging = previous.minimap_dragging;
+        self.minimap_drag_distance = previous.minimap_drag_distance;
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -882,6 +942,10 @@ impl XSphereRenderer {
     }
 
     fn update(&mut self) {
+        // Non-blocking. Lets wgpu run pending callbacks, including the device-lost
+        // callback, which some loss paths only deliver from a poll.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
@@ -1144,6 +1208,62 @@ impl XSphereRenderer {
 #[derive(Default)]
 struct XSphereApp {
     renderer: Option<XSphereRenderer>,
+    /// When the last rebuild after a device loss was attempted, to space out retries.
+    last_recovery_attempt: Option<Instant>,
+}
+
+impl XSphereApp {
+    const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// If the GPU device was lost, rebuilds the renderer on a new device and carries
+    /// the session over. Returns `true` when the renderer is usable for this frame.
+    ///
+    /// When the rebuild fails (for example while the driver is still resetting), the
+    /// lost renderer is kept only for its session state, drawing is suspended, and the
+    /// rebuild is retried once per `RECOVERY_RETRY_INTERVAL`.
+    fn recover_from_device_loss(&mut self) -> bool {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return false;
+        };
+        if !renderer.device_lost.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let now = Instant::now();
+        if self
+            .last_recovery_attempt
+            .is_some_and(|last| now.duration_since(last) < Self::RECOVERY_RETRY_INTERVAL)
+        {
+            return false;
+        }
+        self.last_recovery_attempt = Some(now);
+
+        // A window backs only one surface at a time: release the old one first.
+        drop(renderer.surface.take());
+
+        match pollster::block_on(XSphereRenderer::new(renderer.window.clone())) {
+            Ok(mut rebuilt) => {
+                if let Some(previous) = self.renderer.take() {
+                    rebuilt.adopt_session_state(previous);
+                }
+                self.renderer = Some(rebuilt);
+                self.last_recovery_attempt = None;
+                log::info!("GPU device recovered; renderer rebuilt");
+                true
+            }
+            Err(e) => {
+                log::error!("Renderer rebuild after device loss failed, will retry: {e}");
+                // Input events are ignored while suspended, so releases would be missed:
+                // drop held keys and buttons instead of carrying them over as stuck.
+                renderer.keys_pressed.clear();
+                renderer.left_mouse_down = false;
+                renderer.right_mouse_down = false;
+                renderer.dragging_window = None;
+                renderer.minimap_dragging = false;
+                false
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for XSphereApp {
@@ -1163,7 +1283,8 @@ impl ApplicationHandler for XSphereApp {
                     .expect("Failed to create XSphereDE window"),
             );
 
-            let renderer = pollster::block_on(XSphereRenderer::new(window));
+            let renderer =
+                pollster::block_on(XSphereRenderer::new(window)).unwrap_or_else(|e| panic!("{e}"));
             self.renderer = Some(renderer);
         }
     }
@@ -1174,6 +1295,31 @@ impl ApplicationHandler for XSphereApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Every GPU resource is invalid once the device is lost, so nothing may touch
+        // the renderer until it has been rebuilt. Recovery runs on the next redraw.
+        let device_lost = self
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.device_lost.load(Ordering::Acquire));
+        if device_lost {
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                    return;
+                }
+                WindowEvent::RedrawRequested => {
+                    if !self.recover_from_device_loss() {
+                        // No usable device yet: keep the redraw loop alive to retry.
+                        if let Some(renderer) = &self.renderer {
+                            renderer.window.request_redraw();
+                        }
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
