@@ -116,8 +116,9 @@ impl MiniGlobeHud {
 
     pub fn view_proj_matrix(&self) -> Mat4 {
         let eye = self.eye_position();
-        let view = Mat4::look_at_rh(eye, Vec3::ZERO, Vec3::Y);
-        let proj = Mat4::perspective_rh(48.0_f32.to_radians(), 1.0, 1.0, 200.0);
+        let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+        let proj =
+            glam::camera::rh::proj::directx::perspective(48.0_f32.to_radians(), 1.0, 1.0, 200.0);
         proj * view
     }
 
