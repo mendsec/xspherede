@@ -153,7 +153,12 @@ impl XSphereRenderer {
             .await
             .expect("No compatible GPU adapter found");
 
-        log::info!("Selected GPU for XSphereDE: {:?}", adapter.get_info().name);
+        let adapter_info = adapter.get_info();
+        log::info!(
+            "Selected GPU for XSphereDE: {:?} (backend: {:?})",
+            adapter_info.name,
+            adapter_info.backend
+        );
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {

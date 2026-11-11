@@ -85,3 +85,24 @@ jobs:
           key: ${{ matrix.target }}
       # Type-checks the whole dependency graph for the target. No linking and no execution.
       - run: cargo check --locked --target ${{ matrix.target }}
+
+  openbsd:
+    name: BSD cross-check (x86_64-unknown-openbsd)
+    runs-on: ubuntu-latest
+    # OpenBSD is a tier 3 Rust target with no prebuilt standard library, so this job
+    # builds it from source, which needs nightly. A nightly regression must not block
+    # a pull request.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup default nightly
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: x86_64-unknown-openbsd
+      # Type-checks the whole dependency graph for the target. No linking and no execution.
+      - run: cargo check -Zbuild-std --locked --target x86_64-unknown-openbsd

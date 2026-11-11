@@ -69,7 +69,7 @@ These are the mechanisms implemented in [`src/security.rs`](src/security.rs) and
 - **Lockdown mode.** One key blanks every window surface and wipes the vault.
 - **Surface validation.** Window buffers are bounds-checked against fixed dimension and size limits before they reach the GPU.
 - **Shader integrity check.** The WGSL source is hashed with SHA-256 and compared against a pinned digest before it is compiled.
-- **Host audit.** A read-only startup and on-demand (`F12`) report on relevant kernel settings (`ptrace_scope`, `kptr_restrict`, `dmesg_restrict`), injected-library environment variables, and allocator hardening.
+- **Host audit.** A read-only startup and on-demand (`F12`) report on relevant Linux kernel settings (`ptrace_scope`, `kptr_restrict`, `dmesg_restrict`; shown as `n/a` on other systems), injected-library environment variables, and allocator hardening.
 - **Policy baseline.** `SecurityPolicy::maximum_hardened()` declares the defaults the future compositor session will enforce: Xwayland off, no automatic thumbnailers, no third-party shell extensions, no setuid helpers.
 - **Build hardening.** `unsafe_code = "forbid"`, integer overflow checks enabled in release builds, `panic = "abort"`, fat LTO, stripped symbols, and a committed `Cargo.lock`.
 
@@ -81,7 +81,8 @@ These are the mechanisms implemented in [`src/security.rs`](src/security.rs) and
 | :--- | :--- |
 | Linux (Wayland, X11) | Primary development target |
 | FreeBSD, NetBSD | Compiles: cross-checked in CI on every change. Not yet tested at run time; expected to work through Vulkan or GLES. Reports welcome |
-| OpenBSD, DragonFly BSD | Untested. Reports and patches welcome |
+| OpenBSD | Compiles: cross-checked in CI on every change with a nightly toolchain. Not yet tested at run time; see [OpenBSD](#openbsd). Reports welcome |
+| DragonFly BSD | Untested. Reports and patches welcome |
 | Windows, macOS | Should run through `wgpu` and `winit`; not a project focus |
 
 If you run XSphereDE on a BSD or an unusual GPU and driver combination, please open an issue with the result, whether it worked or not.
@@ -115,6 +116,25 @@ RUST_LOG=info cargo run --release --locked
 ```bash
 cargo test --locked
 ```
+
+### OpenBSD
+
+XSphereDE type-checks for OpenBSD in CI but has not been run there yet, so these steps are a starting point rather than a verified recipe. Please [open a platform report](https://github.com/mendsec/xspherede/issues/new?template=platform_report.yml) with what you find.
+
+- `rustup` is not available on OpenBSD. Install the toolchain from packages and confirm that `rustc --version` reports 1.88 or newer:
+
+  ```bash
+  pkg_add rust git libxkbcommon vulkan-loader
+  ```
+
+- Run from an X11 session. `libxkbcommon` is required; `vulkan-loader` is optional, and without it the renderer falls back to OpenGL / GLES.
+- The release profile uses fat LTO, which can exceed the default data size limit of a login class. Start with a debug build, or raise the limit with `ulimit -d` before a release build:
+
+  ```bash
+  RUST_LOG=info cargo run --locked
+  ```
+
+- If no window appears, the `RUST_LOG=info` output shows the selected GPU and graphics backend, or the error that stopped startup. Include it in the report.
 
 ---
 
