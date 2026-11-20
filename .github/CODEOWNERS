@@ -1,0 +1,11 @@
+# Default code owner for the repository.
+* @mendsec
+
+# Explicit ownership for security-critical code, shaders, dependencies, and automation.
+/src/security.rs @mendsec
+/src/shader.wgsl @mendsec
+/Cargo.toml @mendsec
+/Cargo.lock @mendsec
+/deny.toml @mendsec
+/.github/ @mendsec
+/.coderabbit.yaml @mendsec
