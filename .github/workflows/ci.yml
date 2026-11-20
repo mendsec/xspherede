@@ -65,6 +65,18 @@ jobs:
           tool: cargo-audit
       - run: cargo audit
 
+  deny:
+    name: Dependency policy (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
   bsd:
     name: BSD cross-check (${{ matrix.target }})
     runs-on: ubuntu-latest

@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Automated code and security review tooling: CodeQL analysis (`rust` and `actions`), `cargo-deny` policy checks, `zizmor` workflow auditing, pull request dependency review, OpenSSF Scorecard, stricter Clippy lints, static WGSL validation in unit tests, `CODEOWNERS`, and CodeRabbit configuration.
 - Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD, NetBSD, and OpenBSD.
 - OpenBSD build and run instructions in the README.
 - Contribution guide, code of conduct, issue forms, and pull request template.

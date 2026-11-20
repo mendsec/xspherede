@@ -721,4 +721,18 @@ mod tests {
             Err(SecurityViolation::IntegrityCheckFailed { .. })
         ));
     }
+
+    #[test]
+    fn test_shader_wgsl_parses_and_validates() {
+        let shader_src = include_str!("shader.wgsl");
+        let module = wgpu::naga::front::wgsl::parse_str(shader_src)
+            .expect("WGSL shader source must parse cleanly");
+        let mut validator = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
+        );
+        validator
+            .validate(&module)
+            .expect("WGSL shader module must pass naga validation");
+    }
 }

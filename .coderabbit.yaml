@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+tone_instructions: "Be concise, technical, and defensive. Never publish exploit steps, PoCs, or vulnerability disclosure analyses in public PR comments; frame security feedback functionally."
+
+reviews:
+  profile: "chill"
+  high_level_summary: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_usernames:
+      - "dependabot[bot]"
+  path_instructions:
+    - path: "**/*"
+      instructions: |
+        - Enforce English-only across all code, shaders, comments, logs, UI strings, configs, and documentation.
+        - Do not overstate security guarantees; descriptions must match what the prototype implements today.
+        - Coordinated disclosure rule: never write exploit proofs-of-concept, attack payloads, or vulnerability analyses in public PR comments. Keep security-related feedback strictly functional and defensive, and refer sensitive findings to SECURITY.md.
+    - path: "src/**/*.rs"
+      instructions: |
+        - The crate enforces `unsafe_code = "forbid"`; flag any attempt to introduce `unsafe` or bypass lints.
+        - Release builds use `panic = "abort"` and `overflow-checks = true`; flag avoidable panics (`.unwrap()`, unchecked indexing/slicing, integer overflow/underflow) that could crash the compositor.
+        - Check that behavior changes in `security.rs`, raycasting, or geometry include corresponding unit tests.
+    - path: "src/security.rs"
+      instructions: |
+        - Verify trust-domain isolation invariants (`TrustDomain`, Biba MAC rules in `SecureClipboardVault`, single-use wipe, lockdown mode, and surface buffer dimension/size bounds).
+        - If `EXPECTED_SHADER_SHA256` changes, verify it matches `src/shader.wgsl`.
+        - Keep all review comments strictly functional and defensive without describing exploitation paths.
+    - path: "src/shader.wgsl"
+      instructions: |
+        - Verify that any change to `src/shader.wgsl` updates `EXPECTED_SHADER_SHA256` in `src/security.rs` in the same commit.
+        - Verify compositor-drawn trust-domain borders remain unforgeable by client window texture sampling and stay within valid WGSL bounds.
+    - path: "Cargo.toml"
+      instructions: |
+        - Flag any newly added dependency and verify it is justified in the PR description and compatible with the MIT license.
+        - Ensure hardened profile flags (`overflow-checks = true`, `panic = "abort"`, `lto = "fat"`) and `[lints]` restrictions are preserved.
+    - path: ".github/**"
+      instructions: |
+        - Verify every third-party GitHub Action is pinned to a full 40-character commit SHA with a version comment.
+        - Verify `actions/checkout` sets `persist-credentials: false`, workflow permissions follow least privilege, and no untrusted PR code runs with privileged triggers (`pull_request_target`) or secret access.
+
+knowledge_base:
+  automatic_linking_mode: "auto"
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+
+chat:
+  art: false
+  auto_reply: true

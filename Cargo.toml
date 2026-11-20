@@ -13,6 +13,26 @@ categories = ["graphics", "gui", "rendering"]
 [lints.rust]
 unsafe_code = "forbid"
 
+[lints.clippy]
+await_holding_lock = "deny"
+dbg_macro = "deny"
+debug_assert_with_mut_call = "deny"
+empty_drop = "deny"
+exit = "deny"
+fallible_impl_from = "deny"
+fn_to_numeric_cast_any = "deny"
+infinite_loop = "deny"
+large_stack_arrays = "deny"
+lossy_float_literal = "deny"
+mem_forget = "deny"
+mutex_atomic = "deny"
+print_stderr = "deny"
+print_stdout = "deny"
+rc_mutex = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+
 [dependencies]
 bytemuck = { version = "1.21", features = ["derive"] }
 env_logger = "0.11"
