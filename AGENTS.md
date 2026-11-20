@@ -14,3 +14,6 @@ This file defines persistent rules and architectural context for AI coding agent
      - **GitHub (Private):** `https://github.com/mendsec/xspherede-security`
      - **Local Path:** `/home/fabio/Dev/xspherede-security` (restricted `0700` permissions)
    - Public commits fixing security issues in `mendsec/xspherede` must use clean, functional, defensive descriptions without exposing exploit vectors, internal heuristics, or vulnerability identifiers prior to coordinated disclosure.
+3. **Never Auto-Merge Pull Requests — Wait for Human and Agent Review:**
+   - Never merge a pull request automatically unless the maintainer explicitly asks to merge that specific pull request.
+   - Always leave newly opened pull requests open so the maintainer can perform human review and other automated review agents have time to finish analyzing the changes.
