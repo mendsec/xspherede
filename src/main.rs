@@ -15,8 +15,9 @@ use security::{
 };
 use sphere_env::{generate_matrix_code_volume, generate_sphere_grid, GridVertex, MatrixVertex};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use wgpu::util::DeviceExt;
 use window3d::{generate_demo_window_rgba, SphericalWindow, WindowVertex};
 use winit::application::ApplicationHandler;
@@ -48,12 +49,73 @@ struct WindowRenderEntry {
     state_buffer: wgpu::Buffer,
 }
 
+/// Non-GPU pointer, keyboard, and window-interaction state carried across renderer rebuilds.
+struct InteractionState {
+    cursor_pos: (f32, f32),
+    last_cursor_pos: Option<(f32, f32)>,
+    right_mouse_down: bool,
+    left_mouse_down: bool,
+    free_look_mode: bool,
+    shift_held: bool,
+    ctrl_held: bool,
+    keys_pressed: HashSet<KeyCode>,
+    hovered_window: Option<usize>,
+    focused_window: Option<usize>,
+    dragging_window: Option<usize>,
+    minimap_dragging: bool,
+    minimap_drag_distance: f32,
+}
+
+impl InteractionState {
+    fn new(width: u32, height: u32) -> Self {
+        Self {
+            cursor_pos: (width as f32 * 0.5, height as f32 * 0.5),
+            last_cursor_pos: None,
+            right_mouse_down: false,
+            left_mouse_down: false,
+            free_look_mode: false,
+            shift_held: false,
+            ctrl_held: false,
+            keys_pressed: HashSet::new(),
+            hovered_window: None,
+            focused_window: Some(0),
+            dragging_window: None,
+            minimap_dragging: false,
+            minimap_drag_distance: 0.0,
+        }
+    }
+
+    /// Releases held keys, modifiers, mouse buttons, and active drags so they are not
+    /// carried over as stuck if release events are missed while rendering is suspended.
+    fn release_held(&mut self) {
+        self.keys_pressed.clear();
+        self.left_mouse_down = false;
+        self.right_mouse_down = false;
+        self.shift_held = false;
+        self.ctrl_held = false;
+        self.dragging_window = None;
+        self.minimap_dragging = false;
+    }
+}
+
+/// Returns `true` when enough time has elapsed since `last_attempt` to retry recovery.
+fn should_attempt_recovery(
+    last_attempt: Option<Instant>,
+    now: Instant,
+    interval: Duration,
+) -> bool {
+    last_attempt.is_none_or(|last| now.duration_since(last) >= interval)
+}
+
 struct XSphereRenderer {
     window: Arc<Window>,
     instance: wgpu::Instance,
     /// `None` only between losing the surface and successfully recreating it.
     surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
+    /// Set by wgpu when the device is lost. Every GPU resource in this renderer is
+    /// then invalid and the renderer must be rebuilt (see `XSphereApp::recover_from_device_loss`).
+    device_lost: Arc<AtomicBool>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     depth_view: wgpu::TextureView,
@@ -89,22 +151,8 @@ struct XSphereRenderer {
     last_frame: Instant,
     matrix_speed_mult: f32,
 
-    // 3D spatial interaction state
-    cursor_pos: (f32, f32),
-    last_cursor_pos: Option<(f32, f32)>,
-    right_mouse_down: bool,
-    left_mouse_down: bool,
-    free_look_mode: bool,
-    shift_held: bool,
-    ctrl_held: bool,
-    keys_pressed: HashSet<KeyCode>,
-    hovered_window: Option<usize>,
-    focused_window: Option<usize>,
-    dragging_window: Option<usize>,
-
-    // Mini-Globe interaction state
-    minimap_dragging: bool,
-    minimap_drag_distance: f32,
+    // 3D spatial and Mini-Globe interaction state
+    interaction: InteractionState,
 }
 
 impl XSphereRenderer {
@@ -129,7 +177,11 @@ impl XSphereRenderer {
         texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    async fn new(window: Arc<Window>) -> Self {
+    /// Builds the renderer and every GPU resource it owns for `window`.
+    ///
+    /// Returns an error when the GPU cannot be initialized (no surface, adapter, or
+    /// device). Security invariant failures still abort.
+    async fn new(window: Arc<Window>) -> Result<Self, String> {
         let size = window.inner_size();
         let width = size.width.max(1);
         let height = size.height.max(1);
@@ -141,7 +193,7 @@ impl XSphereRenderer {
 
         let surface = instance
             .create_surface(window.clone())
-            .expect("Failed to create wgpu surface");
+            .map_err(|e| format!("Failed to create wgpu surface: {e}"))?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -151,7 +203,7 @@ impl XSphereRenderer {
                 apply_limit_buckets: false,
             })
             .await
-            .expect("No compatible GPU adapter found");
+            .map_err(|e| format!("No compatible GPU adapter found: {e}"))?;
 
         let adapter_info = adapter.get_info();
         log::info!(
@@ -170,7 +222,16 @@ impl XSphereRenderer {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Failed to initialize graphics device");
+            .map_err(|e| format!("Failed to initialize graphics device: {e}"))?;
+
+        let device_lost = Arc::new(AtomicBool::new(false));
+        {
+            let device_lost = device_lost.clone();
+            device.set_device_lost_callback(move |reason, message| {
+                log::error!("GPU device lost ({reason:?}): {message}");
+                device_lost.store(true, Ordering::Release);
+            });
+        }
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -689,11 +750,12 @@ impl XSphereRenderer {
         }
 
         let now = Instant::now();
-        Self {
+        Ok(Self {
             window,
             instance,
             surface: Some(surface),
             device,
+            device_lost,
             queue,
             config,
             depth_view,
@@ -719,20 +781,38 @@ impl XSphereRenderer {
             start_time: now,
             last_frame: now,
             matrix_speed_mult: 1.0,
-            cursor_pos: (width as f32 * 0.5, height as f32 * 0.5),
-            last_cursor_pos: None,
-            right_mouse_down: false,
-            left_mouse_down: false,
-            free_look_mode: false,
-            shift_held: false,
-            ctrl_held: false,
-            keys_pressed: HashSet::new(),
-            hovered_window: None,
-            focused_window: Some(0),
-            dragging_window: None,
-            minimap_dragging: false,
-            minimap_drag_distance: 0.0,
+            interaction: InteractionState::new(width, height),
+        })
+    }
+
+    /// Carries the session over from `previous` into this freshly built renderer:
+    /// camera, window placement, Mini-Globe, security state, and input state.
+    ///
+    /// GPU resources are not carried over; this renderer keeps the ones it created.
+    fn adopt_session_state(&mut self, previous: XSphereRenderer) {
+        self.camera = previous.camera;
+        self.minimap = previous.minimap;
+
+        for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
+            entry.win.azimuth = old.win.azimuth;
+            entry.win.elevation = old.win.elevation;
+            entry.win.radius = old.win.radius;
+            entry.win.angular_width = old.win.angular_width;
+            entry.win.angular_height = old.win.angular_height;
+            entry.win.hovered = old.win.hovered;
+            entry.win.focused = old.win.focused;
+            entry.win.update_geometry(&self.queue);
         }
+
+        self.security_policy = previous.security_policy;
+        self.clipboard_vault = previous.clipboard_vault;
+        self.lockdown_active = previous.lockdown_active;
+
+        self.start_time = previous.start_time;
+        self.last_frame = previous.last_frame;
+        self.matrix_speed_mult = previous.matrix_speed_mult;
+
+        self.interaction = previous.interaction;
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -767,7 +847,7 @@ impl XSphereRenderer {
     /// When the user clicks inside the Mini-Globe, smoothly directs the 3D environment there.
     fn jump_to_minimap_point(&mut self, px: f32, py: f32) {
         if let Some(win_idx) = self.raycast_window_in_minimap(px, py) {
-            self.focused_window = Some(win_idx);
+            self.interaction.focused_window = Some(win_idx);
             let w = &self.windows[win_idx].win;
             self.camera.look_at_spherical(w.azimuth, w.elevation);
             if self.minimap.expanded {
@@ -791,13 +871,19 @@ impl XSphereRenderer {
         let h = self.config.height.max(1);
 
         // 1. First check whether the mouse cursor is hovering over the Mini-Globe
-        self.minimap.is_hovered =
-            self.minimap
-                .contains_cursor(self.cursor_pos.0, self.cursor_pos.1, w, h);
+        self.minimap.is_hovered = self.minimap.contains_cursor(
+            self.interaction.cursor_pos.0,
+            self.interaction.cursor_pos.1,
+            w,
+            h,
+        );
 
         if self.minimap.is_hovered {
-            let hovered_win = self.raycast_window_in_minimap(self.cursor_pos.0, self.cursor_pos.1);
-            self.hovered_window = hovered_win;
+            let hovered_win = self.raycast_window_in_minimap(
+                self.interaction.cursor_pos.0,
+                self.interaction.cursor_pos.1,
+            );
+            self.interaction.hovered_window = hovered_win;
             if let Some(idx) = hovered_win {
                 let win = &self.windows[idx].win;
                 self.window.set_title(&format!(
@@ -807,10 +893,12 @@ impl XSphereRenderer {
                     win.title,
                     win.radius
                 ));
-            } else if let Some((az, el)) =
-                self.minimap
-                    .pick_spherical_point(self.cursor_pos.0, self.cursor_pos.1, w, h)
-            {
+            } else if let Some((az, el)) = self.minimap.pick_spherical_point(
+                self.interaction.cursor_pos.0,
+                self.interaction.cursor_pos.1,
+                w,
+                h,
+            ) {
                 self.window.set_title(&format!(
                     "XSphereDE v{} [Mini-Globe] — Left Click: Jump to ({:.0}°, {:.0}°) | Right Click or 'G': Expand/Collapse Globe",
                     env!("CARGO_PKG_VERSION"),
@@ -820,8 +908,8 @@ impl XSphereRenderer {
             }
         } else {
             // 2. Standard 3D window raycasting in the main scene
-            let ndc_x = (self.cursor_pos.0 / w as f32) * 2.0 - 1.0;
-            let ndc_y = 1.0 - (self.cursor_pos.1 / h as f32) * 2.0;
+            let ndc_x = (self.interaction.cursor_pos.0 / w as f32) * 2.0 - 1.0;
+            let ndc_y = 1.0 - (self.interaction.cursor_pos.1 / h as f32) * 2.0;
             let (ray_origin, ray_dir) = self.camera.screen_ray(ndc_x, ndc_y);
 
             let mut best_hit: Option<(usize, f32)> = None;
@@ -833,9 +921,9 @@ impl XSphereRenderer {
                 }
             }
 
-            if self.hovered_window != best_hit.map(|(idx, _)| idx) {
-                self.hovered_window = best_hit.map(|(idx, _)| idx);
-                if let Some(idx) = self.hovered_window {
+            if self.interaction.hovered_window != best_hit.map(|(idx, _)| idx) {
+                self.interaction.hovered_window = best_hit.map(|(idx, _)| idx);
+                if let Some(idx) = self.interaction.hovered_window {
                     let win = &self.windows[idx].win;
                     let net_tag = if win.trust_domain.allows_network() {
                         "NET-SANDBOXED"
@@ -864,8 +952,8 @@ impl XSphereRenderer {
 
         let lockdown_flag = if self.lockdown_active { 1.0 } else { 0.0 };
         for (idx, entry) in self.windows.iter_mut().enumerate() {
-            entry.win.hovered = self.hovered_window == Some(idx);
-            entry.win.focused = self.focused_window == Some(idx);
+            entry.win.hovered = self.interaction.hovered_window == Some(idx);
+            entry.win.focused = self.interaction.focused_window == Some(idx);
             let [tr, tg, tb] = entry.win.trust_domain.border_color_rgb();
             let uniform = WindowStateUniform {
                 state: [
@@ -882,40 +970,48 @@ impl XSphereRenderer {
     }
 
     fn update(&mut self) {
+        // Non-blocking. Lets wgpu run pending callbacks, including the device-lost
+        // callback, which some loss paths only deliver from a poll.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32().min(0.1);
         self.last_frame = now;
 
         // Continuous spatial movement (W/A/S/D + Q/E to fly through the Matrix code corridors)
-        let speed = if self.shift_held { 18.0 } else { 9.5 } * dt;
+        let speed = if self.interaction.shift_held {
+            18.0
+        } else {
+            9.5
+        } * dt;
         let mut fwd = 0.0;
         let mut right = 0.0;
         let mut up = 0.0;
 
-        if self.keys_pressed.contains(&KeyCode::KeyW)
-            || self.keys_pressed.contains(&KeyCode::ArrowUp)
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyW)
+            || self.interaction.keys_pressed.contains(&KeyCode::ArrowUp)
         {
             fwd += speed;
         }
-        if self.keys_pressed.contains(&KeyCode::KeyS)
-            || self.keys_pressed.contains(&KeyCode::ArrowDown)
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyS)
+            || self.interaction.keys_pressed.contains(&KeyCode::ArrowDown)
         {
             fwd -= speed;
         }
-        if self.keys_pressed.contains(&KeyCode::KeyD)
-            || self.keys_pressed.contains(&KeyCode::ArrowRight)
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyD)
+            || self.interaction.keys_pressed.contains(&KeyCode::ArrowRight)
         {
             right += speed;
         }
-        if self.keys_pressed.contains(&KeyCode::KeyA)
-            || self.keys_pressed.contains(&KeyCode::ArrowLeft)
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyA)
+            || self.interaction.keys_pressed.contains(&KeyCode::ArrowLeft)
         {
             right -= speed;
         }
-        if self.keys_pressed.contains(&KeyCode::KeyE) {
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyE) {
             up += speed;
         }
-        if self.keys_pressed.contains(&KeyCode::KeyQ) {
+        if self.interaction.keys_pressed.contains(&KeyCode::KeyQ) {
             up -= speed;
         }
 
@@ -931,8 +1027,9 @@ impl XSphereRenderer {
         let cam_fwd = self.camera.forward();
         // Frontal clear field-of-view reach: guarantees a 100% clear corridor past the focused window
         let active_clear_dist = self
+            .interaction
             .hovered_window
-            .or(self.focused_window)
+            .or(self.interaction.focused_window)
             .and_then(|idx| self.windows.get(idx))
             .map(|entry| (entry.win.world_center() - self.camera.position).length() + 1.5)
             .unwrap_or(11.8)
@@ -954,8 +1051,14 @@ impl XSphereRenderer {
             ],
             params: [
                 elapsed,
-                self.focused_window.map(|i| i as f32).unwrap_or(-1.0),
-                self.hovered_window.map(|i| i as f32).unwrap_or(-1.0),
+                self.interaction
+                    .focused_window
+                    .map(|i| i as f32)
+                    .unwrap_or(-1.0),
+                self.interaction
+                    .hovered_window
+                    .map(|i| i as f32)
+                    .unwrap_or(-1.0),
                 self.matrix_speed_mult,
             ],
             camera_forward: [cam_fwd.x, cam_fwd.y, cam_fwd.z, active_clear_dist],
@@ -1144,6 +1247,59 @@ impl XSphereRenderer {
 #[derive(Default)]
 struct XSphereApp {
     renderer: Option<XSphereRenderer>,
+    /// When the last rebuild after a device loss was attempted, to space out retries.
+    last_recovery_attempt: Option<Instant>,
+}
+
+impl XSphereApp {
+    const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// If the GPU device was lost, rebuilds the renderer on a new device and carries
+    /// the session over. Returns `true` when the renderer is usable for this frame.
+    ///
+    /// When the rebuild fails (for example while the driver is still resetting), the
+    /// lost renderer is kept only for its session state, drawing is suspended, and the
+    /// rebuild is retried once per `RECOVERY_RETRY_INTERVAL`.
+    fn recover_from_device_loss(&mut self) -> bool {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return false;
+        };
+        if !renderer.device_lost.load(Ordering::Acquire) {
+            return true;
+        }
+
+        let now = Instant::now();
+        if !should_attempt_recovery(
+            self.last_recovery_attempt,
+            now,
+            Self::RECOVERY_RETRY_INTERVAL,
+        ) {
+            return false;
+        }
+        self.last_recovery_attempt = Some(now);
+
+        // A window backs only one surface at a time: release the old one first.
+        drop(renderer.surface.take());
+
+        match pollster::block_on(XSphereRenderer::new(renderer.window.clone())) {
+            Ok(mut rebuilt) => {
+                if let Some(previous) = self.renderer.take() {
+                    rebuilt.adopt_session_state(previous);
+                }
+                self.renderer = Some(rebuilt);
+                self.last_recovery_attempt = None;
+                log::info!("GPU device recovered; renderer rebuilt");
+                true
+            }
+            Err(e) => {
+                log::error!("Renderer rebuild after device loss failed, will retry: {e}");
+                // Input events are ignored while suspended, so releases would be missed:
+                // drop held keys and buttons instead of carrying them over as stuck.
+                renderer.interaction.release_held();
+                false
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for XSphereApp {
@@ -1163,7 +1319,8 @@ impl ApplicationHandler for XSphereApp {
                     .expect("Failed to create XSphereDE window"),
             );
 
-            let renderer = pollster::block_on(XSphereRenderer::new(window));
+            let renderer =
+                pollster::block_on(XSphereRenderer::new(window)).unwrap_or_else(|e| panic!("{e}"));
             self.renderer = Some(renderer);
         }
     }
@@ -1174,6 +1331,31 @@ impl ApplicationHandler for XSphereApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        // Every GPU resource is invalid once the device is lost, so nothing may touch
+        // the renderer until it has been rebuilt. Recovery runs on the next redraw.
+        let device_lost = self
+            .renderer
+            .as_ref()
+            .is_some_and(|renderer| renderer.device_lost.load(Ordering::Acquire));
+        if device_lost {
+            match event {
+                WindowEvent::CloseRequested => {
+                    event_loop.exit();
+                    return;
+                }
+                WindowEvent::RedrawRequested => {
+                    if !self.recover_from_device_loss() {
+                        // No usable device yet: keep the redraw loop alive to retry.
+                        if let Some(renderer) = &self.renderer {
+                            renderer.window.request_redraw();
+                        }
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -1182,14 +1364,14 @@ impl ApplicationHandler for XSphereApp {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => renderer.resize(size),
             WindowEvent::ModifiersChanged(mods) => {
-                renderer.shift_held = mods.state().shift_key();
-                renderer.ctrl_held = mods.state().control_key();
+                renderer.interaction.shift_held = mods.state().shift_key();
+                renderer.interaction.ctrl_held = mods.state().control_key();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     match event.state {
                         ElementState::Pressed => {
-                            renderer.keys_pressed.insert(code);
+                            renderer.interaction.keys_pressed.insert(code);
                             match code {
                                 KeyCode::Escape => {
                                     if renderer.minimap.expanded {
@@ -1199,12 +1381,15 @@ impl ApplicationHandler for XSphereApp {
                                     }
                                 }
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + C (Copy to Vault)
-                                KeyCode::KeyC if renderer.ctrl_held && renderer.shift_held => {
+                                KeyCode::KeyC
+                                    if renderer.interaction.ctrl_held
+                                        && renderer.interaction.shift_held =>
+                                {
                                     if renderer.lockdown_active {
                                         log::warn!(
                                             "[SECURITY] Clipboard copy blocked: Lockdown active"
                                         );
-                                    } else if let Some(idx) = renderer.focused_window {
+                                    } else if let Some(idx) = renderer.interaction.focused_window {
                                         let win = &renderer.windows[idx].win;
                                         renderer.clipboard_vault.seal_from_window(
                                             win.trust_domain,
@@ -1221,12 +1406,15 @@ impl ApplicationHandler for XSphereApp {
                                     }
                                 }
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + V (Paste & Auto-Wipe)
-                                KeyCode::KeyV if renderer.ctrl_held && renderer.shift_held => {
+                                KeyCode::KeyV
+                                    if renderer.interaction.ctrl_held
+                                        && renderer.interaction.shift_held =>
+                                {
                                     if renderer.lockdown_active {
                                         log::warn!(
                                             "[SECURITY] Clipboard paste blocked: Lockdown active"
                                         );
-                                    } else if let Some(idx) = renderer.focused_window {
+                                    } else if let Some(idx) = renderer.interaction.focused_window {
                                         let dest_win = &renderer.windows[idx].win;
                                         match renderer
                                             .clipboard_vault
@@ -1259,7 +1447,7 @@ impl ApplicationHandler for XSphereApp {
                                     renderer.lockdown_active = !renderer.lockdown_active;
                                     if renderer.lockdown_active {
                                         renderer.clipboard_vault.wipe();
-                                        renderer.dragging_window = None;
+                                        renderer.interaction.dragging_window = None;
                                         let msg = "XSphereDE [LOCKDOWN ACTIVE] — All 3D window surfaces encrypted/blanked & Clipboard wiped (Press 'L' to unlock)";
                                         log::warn!("{}", msg);
                                         renderer.window.set_title(msg);
@@ -1286,7 +1474,8 @@ impl ApplicationHandler for XSphereApp {
                                     renderer.minimap.toggle_expanded();
                                 }
                                 KeyCode::Space | KeyCode::Tab => {
-                                    renderer.free_look_mode = !renderer.free_look_mode;
+                                    renderer.interaction.free_look_mode =
+                                        !renderer.interaction.free_look_mode;
                                 }
                                 KeyCode::KeyR | KeyCode::Home => {
                                     renderer.camera.reset_to_center();
@@ -1313,13 +1502,13 @@ impl ApplicationHandler for XSphereApp {
                             }
                         }
                         ElementState::Released => {
-                            renderer.keys_pressed.remove(&code);
+                            renderer.interaction.keys_pressed.remove(&code);
                         }
                     }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                let (px, py) = renderer.cursor_pos;
+                let (px, py) = renderer.interaction.cursor_pos;
                 let on_minimap = renderer.minimap.contains_cursor(
                     px,
                     py,
@@ -1332,44 +1521,46 @@ impl ApplicationHandler for XSphereApp {
                         if state == ElementState::Pressed && on_minimap {
                             renderer.minimap.toggle_expanded();
                         } else {
-                            renderer.right_mouse_down = state == ElementState::Pressed;
+                            renderer.interaction.right_mouse_down = state == ElementState::Pressed;
                         }
                     }
                     MouseButton::Right => {
-                        renderer.right_mouse_down = state == ElementState::Pressed;
+                        renderer.interaction.right_mouse_down = state == ElementState::Pressed;
                         if state == ElementState::Pressed && on_minimap {
-                            renderer.minimap_dragging = true;
-                            renderer.minimap_drag_distance = 0.0;
-                        } else if state == ElementState::Released && renderer.minimap_dragging {
-                            renderer.minimap_dragging = false;
+                            renderer.interaction.minimap_dragging = true;
+                            renderer.interaction.minimap_drag_distance = 0.0;
+                        } else if state == ElementState::Released
+                            && renderer.interaction.minimap_dragging
+                        {
+                            renderer.interaction.minimap_dragging = false;
                             // Quick right-click on the Mini-Globe expands/collapses the Globe on screen
-                            if renderer.minimap_drag_distance < 6.0 && on_minimap {
+                            if renderer.interaction.minimap_drag_distance < 6.0 && on_minimap {
                                 renderer.minimap.toggle_expanded();
                             }
                         }
                     }
                     MouseButton::Left => {
-                        renderer.left_mouse_down = state == ElementState::Pressed;
+                        renderer.interaction.left_mouse_down = state == ElementState::Pressed;
                         if state == ElementState::Pressed {
                             if on_minimap {
-                                renderer.minimap_dragging = true;
-                                renderer.minimap_drag_distance = 0.0;
-                                renderer.dragging_window = None;
-                            } else if let Some(hovered) = renderer.hovered_window {
-                                renderer.focused_window = Some(hovered);
-                                renderer.dragging_window = Some(hovered);
+                                renderer.interaction.minimap_dragging = true;
+                                renderer.interaction.minimap_drag_distance = 0.0;
+                                renderer.interaction.dragging_window = None;
+                            } else if let Some(hovered) = renderer.interaction.hovered_window {
+                                renderer.interaction.focused_window = Some(hovered);
+                                renderer.interaction.dragging_window = Some(hovered);
                             } else {
-                                renderer.dragging_window = None;
+                                renderer.interaction.dragging_window = None;
                             }
                         } else {
                             // Released left mouse button: if it was a quick click on the Mini-Globe, rotate the view there
-                            if renderer.minimap_dragging {
-                                renderer.minimap_dragging = false;
-                                if renderer.minimap_drag_distance < 6.0 {
+                            if renderer.interaction.minimap_dragging {
+                                renderer.interaction.minimap_dragging = false;
+                                if renderer.interaction.minimap_drag_distance < 6.0 {
                                     renderer.jump_to_minimap_point(px, py);
                                 }
                             }
-                            renderer.dragging_window = None;
+                            renderer.interaction.dragging_window = None;
                         }
                     }
                     _ => {}
@@ -1377,31 +1568,31 @@ impl ApplicationHandler for XSphereApp {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let new_pos = (position.x as f32, position.y as f32);
-                if let Some(last) = renderer.last_cursor_pos {
+                if let Some(last) = renderer.interaction.last_cursor_pos {
                     let dx = new_pos.0 - last.0;
                     let dy = new_pos.1 - last.1;
 
-                    if renderer.minimap_dragging {
+                    if renderer.interaction.minimap_dragging {
                         let step_dist = (dx * dx + dy * dy).sqrt();
-                        renderer.minimap_drag_distance += step_dist;
+                        renderer.interaction.minimap_drag_distance += step_dist;
                         // Dragging inside the Mini-Globe rotates the 3D globe
                         renderer.minimap.rotate_globe(dx, dy);
-                    } else if let Some(win_idx) = renderer.dragging_window {
+                    } else if let Some(win_idx) = renderer.interaction.dragging_window {
                         // Drag the 3D window along the curved surface of the sphere (azimuth, elevation)
                         let entry = &mut renderer.windows[win_idx];
                         entry.win.azimuth += dx * 0.0032;
                         entry.win.elevation =
                             (entry.win.elevation - dy * 0.0032).clamp(-1.15, 1.15);
                         entry.win.update_geometry(&renderer.queue);
-                    } else if renderer.right_mouse_down
-                        || renderer.free_look_mode
-                        || renderer.left_mouse_down
+                    } else if renderer.interaction.right_mouse_down
+                        || renderer.interaction.free_look_mode
+                        || renderer.interaction.left_mouse_down
                     {
                         renderer.camera.rotate(dx, dy, 0.0038);
                     }
                 }
-                renderer.cursor_pos = new_pos;
-                renderer.last_cursor_pos = Some(new_pos);
+                renderer.interaction.cursor_pos = new_pos;
+                renderer.interaction.last_cursor_pos = Some(new_pos);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_y = match delta {
@@ -1409,7 +1600,7 @@ impl ApplicationHandler for XSphereApp {
                     MouseScrollDelta::PixelDelta(pos) => (pos.y as f32) * 0.04,
                 };
 
-                let (px, py) = renderer.cursor_pos;
+                let (px, py) = renderer.interaction.cursor_pos;
                 let on_minimap = renderer.minimap.contains_cursor(
                     px,
                     py,
@@ -1419,11 +1610,16 @@ impl ApplicationHandler for XSphereApp {
 
                 // If the cursor is over a window (in the main scene OR inside the Mini-Globe)
                 // or if Shift is held, scrolling adjusts the radial depth of the window inside the globe
-                if let Some(win_idx) = renderer.hovered_window.or(if renderer.shift_held {
-                    renderer.focused_window
-                } else {
-                    None
-                }) {
+                if let Some(win_idx) =
+                    renderer
+                        .interaction
+                        .hovered_window
+                        .or(if renderer.interaction.shift_held {
+                            renderer.interaction.focused_window
+                        } else {
+                            None
+                        })
+                {
                     let entry = &mut renderer.windows[win_idx];
                     entry.win.radius = (entry.win.radius - scroll_y * 0.95).clamp(4.0, 24.5);
                     entry.win.update_geometry(&renderer.queue);
@@ -1468,4 +1664,65 @@ fn main() {
     event_loop
         .run_app(&mut app)
         .expect("Error while running XSphereDE");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_attempt_recovery_respects_retry_interval() {
+        let now = Instant::now();
+        let interval = Duration::from_secs(1);
+
+        assert!(should_attempt_recovery(None, now, interval));
+
+        let too_soon = now;
+        assert!(!should_attempt_recovery(
+            Some(too_soon),
+            now + Duration::from_millis(999),
+            interval
+        ));
+
+        assert!(should_attempt_recovery(
+            Some(too_soon),
+            now + Duration::from_secs(1),
+            interval
+        ));
+    }
+
+    #[test]
+    fn test_release_held_inputs_clears_held_state_and_preserves_session_toggles() {
+        let mut state = InteractionState {
+            cursor_pos: (320.0, 240.0),
+            last_cursor_pos: Some((310.0, 235.0)),
+            right_mouse_down: true,
+            left_mouse_down: true,
+            free_look_mode: true,
+            shift_held: true,
+            ctrl_held: true,
+            keys_pressed: HashSet::from([KeyCode::KeyW, KeyCode::KeyA]),
+            hovered_window: Some(1),
+            focused_window: Some(0),
+            dragging_window: Some(1),
+            minimap_dragging: true,
+            minimap_drag_distance: 42.0,
+        };
+
+        state.release_held();
+
+        assert!(state.keys_pressed.is_empty());
+        assert!(!state.left_mouse_down);
+        assert!(!state.right_mouse_down);
+        assert!(!state.shift_held);
+        assert!(!state.ctrl_held);
+        assert_eq!(state.dragging_window, None);
+        assert!(!state.minimap_dragging);
+
+        // Session toggles and non-held pointer/focus state should remain intact.
+        assert!(state.free_look_mode);
+        assert_eq!(state.cursor_pos, (320.0, 240.0));
+        assert_eq!(state.hovered_window, Some(1));
+        assert_eq!(state.focused_window, Some(0));
+    }
 }
