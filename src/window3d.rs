@@ -1,3 +1,4 @@
+use crate::galaxy::{spherical_to_local, GalaxyId};
 use crate::security::TrustDomain;
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -27,11 +28,16 @@ pub struct SphericalWindow {
     pub title: String,
     /// Immutable Qubes-style security domain assigned by the trusted compositor
     pub trust_domain: TrustDomain,
-    /// Horizontal angle on the sphere (radians, `0` = front `-Z`)
+    /// Galaxy (cluster of windows) this window belongs to
+    pub galaxy: GalaxyId,
+    /// Center of this window's galaxy in universe coordinates. The spherical
+    /// coordinates below are measured from this point, not from the universe core.
+    pub origin: Vec3,
+    /// Horizontal angle around the galaxy center (radians, `0` = front `-Z`)
     pub azimuth: f32,
-    /// Vertical angle on the sphere (radians, `0` = equator)
+    /// Vertical angle around the galaxy center (radians, `0` = equator)
     pub elevation: f32,
-    /// Radial distance from the sphere center (allows pushing/pulling windows in 3D depth)
+    /// Radial distance from the galaxy center (allows pushing/pulling windows in 3D depth)
     pub radius: f32,
     /// Angular width in radians on the sphere
     pub angular_width: f32,
@@ -46,8 +52,10 @@ pub struct SphericalWindow {
 }
 
 impl SphericalWindow {
-    /// Builds a curved 3D mesh that conforms to the spherical shell of radius `self.radius`.
+    /// Builds a curved 3D mesh that conforms to a spherical shell of radius `radius`
+    /// centered at `origin`, the center of the window's galaxy.
     pub fn build_curved_mesh(
+        origin: Vec3,
         azimuth: f32,
         elevation: f32,
         radius: f32,
@@ -63,23 +71,16 @@ impl SphericalWindow {
             let v = r as f32 / rows as f32;
             // v = 0 is the top of the window, v = 1 is the bottom
             let phi = elevation + (0.5 - v) * angular_height;
-            let (sin_phi, cos_phi) = phi.sin_cos();
 
             for c in 0..=cols {
                 let u = c as f32 / cols as f32;
                 let theta = azimuth + (u - 0.5) * angular_width;
-                let (sin_theta, cos_theta) = theta.sin_cos();
-
-                let pos = Vec3::new(
-                    radius * cos_phi * sin_theta,
-                    radius * sin_phi,
-                    -radius * cos_phi * cos_theta,
-                );
-                // Normal pointing toward the center of the sphere (toward the user)
-                let normal = (-pos).normalize_or_zero();
+                let local = spherical_to_local(theta, phi, radius);
+                // Normal pointing toward the galaxy center (toward the user)
+                let normal = (-local).normalize_or_zero();
 
                 vertices.push(WindowVertex {
-                    position: pos.to_array(),
+                    position: (origin + local).to_array(),
                     uv: [u, v],
                     normal: normal.to_array(),
                 });
@@ -104,6 +105,7 @@ impl SphericalWindow {
 
     pub fn update_geometry(&self, queue: &wgpu::Queue) {
         let (vertices, _) = Self::build_curved_mesh(
+            self.origin,
             self.azimuth,
             self.elevation,
             self.radius,
@@ -113,15 +115,21 @@ impl SphericalWindow {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
     }
 
-    /// 3D Cartesian world position of this window's center on the sphere.
+    /// GPU-independent placement of this window in the universe.
+    pub fn patch(&self) -> SphericalPatch {
+        SphericalPatch {
+            origin: self.origin,
+            azimuth: self.azimuth,
+            elevation: self.elevation,
+            radius: self.radius,
+            angular_width: self.angular_width,
+            angular_height: self.angular_height,
+        }
+    }
+
+    /// 3D Cartesian position of this window's center in universe coordinates.
     pub fn world_center(&self) -> Vec3 {
-        let (sin_phi, cos_phi) = self.elevation.sin_cos();
-        let (sin_theta, cos_theta) = self.azimuth.sin_cos();
-        Vec3::new(
-            self.radius * cos_phi * sin_theta,
-            self.radius * sin_phi,
-            -self.radius * cos_phi * cos_theta,
-        )
+        self.patch().world_center()
     }
 
     /// Cosine of the angular protection cone for this window (with extra padding when focused/hovered)
@@ -137,9 +145,38 @@ impl SphericalWindow {
     }
 
     /// Performs exact 3D raycasting against the spherical patch of the window.
-    /// Returns the distance `t` along the ray if the cursor hits this 3D window.
+    /// See [`SphericalPatch::intersect_ray`].
     pub fn intersect_ray(&self, ray_origin: Vec3, ray_dir: Vec3) -> Option<f32> {
-        // Ray-sphere intersection for radius `self.radius` centered at the origin (0,0,0):
+        self.patch().intersect_ray(ray_origin, ray_dir)
+    }
+}
+
+/// A rectangular patch of a spherical shell centered on a galaxy: the geometric
+/// footprint of a window, kept free of GPU resources so it can be reasoned about
+/// and tested on its own.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct SphericalPatch {
+    /// Center of the shell (the galaxy center) in universe coordinates
+    pub origin: Vec3,
+    pub azimuth: f32,
+    pub elevation: f32,
+    pub radius: f32,
+    pub angular_width: f32,
+    pub angular_height: f32,
+}
+
+impl SphericalPatch {
+    /// Center of the patch in universe coordinates.
+    pub fn world_center(&self) -> Vec3 {
+        self.origin + spherical_to_local(self.azimuth, self.elevation, self.radius)
+    }
+
+    /// Exact ray intersection with the patch. `ray_origin` is in universe coordinates
+    /// and `ray_dir` must be a unit vector. Returns the distance `t` along the ray.
+    pub fn intersect_ray(&self, ray_origin: Vec3, ray_dir: Vec3) -> Option<f32> {
+        // Work relative to the galaxy center so the shell is centered at (0,0,0).
+        let ray_origin = ray_origin - self.origin;
+        // Ray-sphere intersection for radius `self.radius`:
         // |O + t*D|^2 = R^2  =>  t^2 + 2*(O.D)*t + (|O|^2 - R^2) = 0
         let b = ray_origin.dot(ray_dir);
         let c = ray_origin.length_squared() - self.radius * self.radius;
@@ -340,4 +377,69 @@ pub fn generate_demo_window_rgba(
     }
 
     data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn front_patch(origin: Vec3) -> SphericalPatch {
+        SphericalPatch {
+            origin,
+            azimuth: 0.0,
+            elevation: 0.0,
+            radius: 10.0,
+            angular_width: 0.6,
+            angular_height: 0.4,
+        }
+    }
+
+    #[test]
+    fn test_patch_at_universe_core_is_hit_from_the_core() {
+        let patch = front_patch(Vec3::ZERO);
+        let t = patch
+            .intersect_ray(Vec3::ZERO, Vec3::NEG_Z)
+            .expect("ray toward the window must hit it");
+        assert!((t - 10.0).abs() < 1e-4, "t = {t}");
+        assert!(patch.intersect_ray(Vec3::ZERO, Vec3::Z).is_none());
+    }
+
+    #[test]
+    fn test_patch_follows_its_galaxy_center() {
+        let center = Vec3::new(60.0, -15.0, 40.0);
+        let patch = front_patch(center);
+        assert!((patch.world_center() - (center + Vec3::new(0.0, 0.0, -10.0))).length() < 1e-4);
+
+        // Seen from the galaxy center, the window is straight ahead at distance `radius`.
+        let t = patch
+            .intersect_ray(center, Vec3::NEG_Z)
+            .expect("ray from the galaxy center must hit the window");
+        assert!((t - 10.0).abs() < 1e-4, "t = {t}");
+
+        // The same ray cast from the universe core misses it.
+        assert!(patch.intersect_ray(Vec3::ZERO, Vec3::NEG_Z).is_none());
+    }
+
+    #[test]
+    fn test_curved_mesh_is_translated_to_the_galaxy_center() {
+        let center = Vec3::new(-20.0, 5.0, 12.0);
+        let patch = front_patch(center);
+        let (vertices, indices) = SphericalWindow::build_curved_mesh(
+            patch.origin,
+            patch.azimuth,
+            patch.elevation,
+            patch.radius,
+            patch.angular_width,
+            patch.angular_height,
+        );
+        assert_eq!(vertices.len(), 17 * 13);
+        assert_eq!(indices.len(), 16 * 12 * 12);
+        for v in &vertices {
+            let local = Vec3::from_array(v.position) - center;
+            assert!((local.length() - patch.radius).abs() < 1e-3);
+            // Normals point back toward the galaxy center.
+            let normal = Vec3::from_array(v.normal);
+            assert!((normal + local.normalize()).length() < 1e-3);
+        }
+    }
 }
