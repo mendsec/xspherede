@@ -171,6 +171,7 @@ xspherede/
 └── src/
     ├── main.rs         # wgpu / winit setup, event loop, render pipelines, lockdown mode
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting
+    ├── galaxy.rs       # Galaxy: clusters of windows, each with its own center in the universe
     ├── window3d.rs     # SphericalWindow: curved meshes, spherical raycasting, WindowSurfaceProvider
     ├── minimap.rs      # MiniGlobeHud: interactive, expandable overview globe
     ├── sphere_env.rs   # Geodesic grid and code rain volume generation
