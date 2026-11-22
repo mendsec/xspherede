@@ -199,7 +199,14 @@ Next:
 - [ ] Per-domain process isolation, so trust domains map to real sandboxes
 - [ ] Input routing to client surfaces through a trusted input path
 - [ ] Polar docks and launchers on the upper and lower rings
+- [ ] Spatial file manager, currently a concept prototype in [XSphereDE Files](https://github.com/mendsec/xspherede-files)
 - [ ] Verified BSD support and distribution packaging
+
+---
+
+## Ecosystem
+
+- **[XSphereDE Files](https://github.com/mendsec/xspherede-files)**: the file manager concept for XSphereDE. Folders appear as a city whose structures show size and density, and a 3D sector map draws your route between folders and any pending copy or cut action. [Try the live demo](https://mendsec.github.io/xspherede-files/) in your browser.
 
 ---
 
