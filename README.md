@@ -8,6 +8,8 @@
 [![unsafe: forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
 [![Status: prototype](https://img.shields.io/badge/status-prototype-yellow.svg)](#project-status)
 
+**Website and browser demos:** https://mendsec.github.io/xspherede/
+
 ![XSphereDE prototype: three curved windows with colored trust-domain borders inside the sphere, surrounded by volumetric code rain, with the Mini-Globe overview in the bottom-right corner](docs/screenshot.webp)
 
 *The v0.0.1 prototype: demo windows in three trust domains, with the Mini-Globe overview in the corner.*
