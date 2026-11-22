@@ -14,6 +14,8 @@
 
 XSphereDE places you at the center of a 360° sphere. Windows are curved meshes that sit on the sphere at a position and depth $(\theta, \phi, r)$, and every window carries a compositor-drawn border that tells you which trust domain it belongs to. It revives the idea behind the classic SphereXP desktop and asks what it would look like if it were built today: memory-safe, GPU-native, Wayland-first, and with isolation as a visible, first-class concept instead of an afterthought.
 
+The sphere is not a planet's globe: it stands for the [shape of the universe](https://en.wikipedia.org/wiki/Shape_of_the_universe), finite and closed. Windows gather into clusters that behave like galaxies, each with its own center, and you travel between them.
+
 ---
 
 ## Project status
@@ -37,7 +39,7 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - **Spatial workspaces without a headset.** A sphere gives you far more usable surface than a flat plane, with depth as a third axis for arranging work, on ordinary monitors and ordinary GPUs.
 - **Isolation you can see.** Borrowing from the Qubes OS model, a window's trust level is part of the desktop's visual language and is drawn by the compositor, never by the application.
 - **Hardened defaults, not hardened options.** The policy baseline follows the direction set by projects such as secureblue: no Xwayland, no automatic thumbnailers, no third-party code inside the compositor.
-- **A small, auditable codebase.** About 3,300 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
+- **A small, auditable codebase.** About 4,500 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
 
 ---
 
@@ -50,9 +52,17 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - Curved windows (16×12 subdivided meshes) that match the sphere's curvature at their own radius, adjustable from 4.0 m to 24.5 m.
 - Exact spherical raycasting for focus, hover, dragging across $(\theta, \phi)$, and depth adjustment.
 
+### Universe and galaxies
+
+- The outer wireframe sphere is the boundary of the universe; the camera can fly anywhere inside it.
+- Windows are grouped into galaxies. Each galaxy has its own center and a wireframe halo, and its windows' $(\theta, \phi, r)$ are measured from that center.
+- Travel between galaxies with an eased flight that turns toward the destination and briefly widens the field of view, then faces the galaxy's first window on arrival.
+- Flying into another galaxy's halo by hand also makes it the current galaxy.
+- Keyboard focus is cleared on arrival, so traveling never silently moves focus into another trust domain.
+
 ### Mini-Globe overview
 
-- An external 3D view of the sphere in the corner of the screen showing every window at its true radial depth.
+- An external 3D view of the current galaxy in the corner of the screen showing its windows at their true radial depths.
 - Rotate it, adjust window depth from it, expand it to the center of the screen as an overview, or click any window or coordinate to fly the main camera there.
 
 ### Volumetric code rain
@@ -154,7 +164,9 @@ XSphereDE type-checks for OpenBSD in CI but has not been run there yet, so these
 | Paste from the clipboard vault | `Ctrl` + `Shift` + `V` |
 | Toggle lockdown mode | `L` |
 | Run the host security audit | `F12` |
-| Recenter at the sphere core | `R` or `Home` |
+| Travel to the previous or next galaxy | `Ctrl` + `PageUp` / `PageDown` |
+| Travel to galaxy 1 to 9 | `Ctrl` + `1` … `9` |
+| Recenter in the current galaxy | `R` or `Home` |
 | Toggle code rain speed | `M` |
 | Toggle fullscreen | `F11` or `F` |
 | Collapse the Mini-Globe, or exit | `Esc` |
@@ -171,7 +183,7 @@ xspherede/
 └── src/
     ├── main.rs         # wgpu / winit setup, event loop, render pipelines, lockdown mode
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting
-    ├── galaxy.rs       # Galaxy: clusters of windows, each with its own center in the universe
+    ├── galaxy.rs       # Galaxy: window clusters, universe and galaxy radii, demo universe
     ├── window3d.rs     # SphericalWindow: curved meshes, spherical raycasting, WindowSurfaceProvider
     ├── minimap.rs      # MiniGlobeHud: interactive, expandable overview globe
     ├── sphere_env.rs   # Geodesic grid and code rain volume generation
@@ -192,6 +204,7 @@ Done:
 - [x] Interactive Mini-Globe overview with true-depth window rendering
 - [x] Trust domains, clipboard vault, lockdown mode, and host audit
 - [x] Volumetric code rain with reading cone and per-window shield
+- [x] Galaxies of windows across a closed universe, with keyboard travel between them
 
 Next:
 

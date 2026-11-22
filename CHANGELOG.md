@@ -6,6 +6,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- Galaxies: windows are grouped into clusters, each with its own center and wireframe halo, inside a larger universe bounded by the outer sphere. The demo universe has four galaxies.
+- Intergalactic travel with `Ctrl` + `PageUp` / `PageDown` or `Ctrl` + `1` … `9`, using an eased camera flight. Keyboard focus is cleared on arrival.
 - Automated code and security review tooling: CodeQL analysis (`rust` and `actions`), `cargo-deny` policy checks, `zizmor` workflow auditing, pull request dependency review, OpenSSF Scorecard, stricter Clippy lints, static WGSL validation in unit tests, `CODEOWNERS`, and CodeRabbit configuration.
 - Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD, NetBSD, and OpenBSD.
 - OpenBSD build and run instructions in the README.
@@ -15,6 +17,8 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The Mini-Globe shows the current galaxy, and `R` / `Home` recenters on the current galaxy.
+- The code rain shields the four windows closest to the camera instead of the first four windows.
 - README rewritten with an explicit project status, platform support table, and roadmap.
 - Minimum supported Rust version declared as 1.88.
 - The host audit reports Linux-specific kernel settings as `n/a` on systems that do not expose them, instead of `0`.

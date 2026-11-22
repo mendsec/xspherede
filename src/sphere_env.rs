@@ -1,4 +1,5 @@
 use bytemuck::{Pod, Zeroable};
+use glam::Vec3;
 use std::f32::consts::{PI, TAU};
 
 #[repr(C)]
@@ -103,6 +104,33 @@ pub fn generate_sphere_grid(radius: f32, meridians: u32, parallels: u32) -> Vec<
     vertices
 }
 
+/// Generates a galaxy halo: a spherical grid of `radius` around `center`.
+///
+/// With `tint = None` the classic Matrix green grid is kept. Otherwise every line is
+/// recolored to `tint`, preserving its relative brightness and opacity. `opacity`
+/// scales the alpha of every line (used to keep the universe boundary subdued).
+pub fn generate_halo_grid(
+    center: Vec3,
+    radius: f32,
+    meridians: u32,
+    parallels: u32,
+    tint: Option<[f32; 3]>,
+    opacity: f32,
+) -> Vec<GridVertex> {
+    let mut vertices = generate_sphere_grid(radius, meridians, parallels);
+    for v in &mut vertices {
+        v.position = (Vec3::from_array(v.position) + center).to_array();
+        if let Some([tr, tg, tb]) = tint {
+            let brightness = v.color[0].max(v.color[1]).max(v.color[2]);
+            v.color[0] = tr * brightness;
+            v.color[1] = tg * brightness;
+            v.color[2] = tb * brightness;
+        }
+        v.color[3] *= opacity;
+    }
+    vertices
+}
+
 /// Lightweight deterministic pseudo-random number generator (`xorshift32`).
 fn next_rand(state: &mut u32) -> f32 {
     let mut x = *state;
@@ -113,13 +141,25 @@ fn next_rand(state: &mut u32) -> f32 {
     (x as f32) / (u32::MAX as f32)
 }
 
-/// Generates 3D volumetric Matrix code ribbons inside the sphere,
-/// along with the outer spherical code curtain, allowing the user to fly through
-/// the code corridors when zooming or moving through 3D space.
-pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Vec<u32>) {
+/// Generates 3D volumetric Matrix code ribbons inside a galaxy of radius `sphere_radius`
+/// centered at `center`, along with its outer spherical code curtain, allowing the user to
+/// fly through the code corridors when zooming or moving through 3D space.
+///
+/// Indices start at `base_vertex`, so the volumes of several galaxies can be appended to
+/// one buffer. `variant` changes the random layout so galaxies do not look identical.
+pub fn generate_matrix_code_volume(
+    sphere_radius: f32,
+    center: Vec3,
+    variant: u32,
+    base_vertex: u32,
+) -> (Vec<MatrixVertex>, Vec<u32>) {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
-    let mut rng = 0x1999_0331_u32; // Release date of The Matrix film :)
+    // Release date of The Matrix film :) Mixed with the variant for distinct galaxies.
+    let mut rng = 0x1999_0331_u32 ^ variant.wrapping_mul(0x9E37_79B9);
+    if rng == 0 {
+        rng = 0x1999_0331;
+    }
 
     let mut push_ribbon = |center_x: f32,
                            center_y: f32,
@@ -131,7 +171,10 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
                            speed: f32,
                            glyphs_y: f32,
                            alpha_boost: f32| {
-        let base_idx = vertices.len() as u32;
+        let base_idx = base_vertex + vertices.len() as u32;
+        let center_x = center.x + center_x;
+        let center_y = center.y + center_y;
+        let center_z = center.z + center_z;
         let (s, c) = yaw_angle.sin_cos();
         let dx = c * half_width;
         let dz = s * half_width;
@@ -237,4 +280,45 @@ pub fn generate_matrix_code_volume(sphere_radius: f32) -> (Vec<MatrixVertex>, Ve
     }
 
     (vertices, indices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_halo_grid_is_centered_and_tinted() {
+        let center = Vec3::new(30.0, -5.0, 12.0);
+        let plain = generate_sphere_grid(10.0, 8, 6);
+        let halo = generate_halo_grid(center, 10.0, 8, 6, Some([1.0, 0.5, 0.0]), 0.5);
+        assert_eq!(plain.len(), halo.len());
+        for (p, h) in plain.iter().zip(&halo) {
+            let local = Vec3::from_array(h.position) - center;
+            assert!((local - Vec3::from_array(p.position)).length() < 1e-4);
+            let brightness = p.color[0].max(p.color[1]).max(p.color[2]);
+            assert!((h.color[0] - brightness).abs() < 1e-6);
+            assert!((h.color[1] - 0.5 * brightness).abs() < 1e-6);
+            assert_eq!(h.color[2], 0.0);
+            assert!((h.color[3] - 0.5 * p.color[3]).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_matrix_volumes_can_share_one_buffer() {
+        let (first_v, first_i) = generate_matrix_code_volume(26.0, Vec3::ZERO, 0, 0);
+        let base = first_v.len() as u32;
+        let center = Vec3::new(90.0, 0.0, 0.0);
+        let (second_v, second_i) = generate_matrix_code_volume(26.0, center, 1, base);
+        assert_eq!(first_v.len(), second_v.len());
+        assert!(first_i.iter().all(|&i| i < base));
+        assert!(second_i
+            .iter()
+            .all(|&i| i >= base && i < base + second_v.len() as u32));
+        // The second volume surrounds its own galaxy center.
+        for v in &second_v {
+            assert!(Vec3::from_array(v.position).distance(center) < 26.0 * 1.5);
+        }
+        // Different variants produce different layouts.
+        assert_ne!(first_v[0].params, second_v[0].params);
+    }
 }
