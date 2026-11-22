@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 - Galaxies: windows are grouped into clusters, each with its own center and wireframe halo, inside a larger universe bounded by the outer sphere. The demo universe has four galaxies.
 - Intergalactic travel with `Ctrl` + `PageUp` / `PageDown` or `Ctrl` + `1` … `9`, using an eased camera flight. Keyboard focus is cleared on arrival.
+- Space warp: hold the left and right mouse buttons and drag to aim at another galaxy's halo, then release to travel there. The chord must be dragged before it can fire, and `Esc` or losing window focus cancels it. Starting the chord while dragging a window carries that window to the destination galaxy.
 - Automated code and security review tooling: CodeQL analysis (`rust` and `actions`), `cargo-deny` policy checks, `zizmor` workflow auditing, pull request dependency review, OpenSSF Scorecard, stricter Clippy lints, static WGSL validation in unit tests, `CODEOWNERS`, and CodeRabbit configuration.
 - Continuous integration: formatting, lints, tests, minimum supported Rust version check, dependency advisory audit, and cross-compilation checks for FreeBSD, NetBSD, and OpenBSD.
 - OpenBSD build and run instructions in the README.
@@ -30,6 +31,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Fixed
 
+- The middle mouse button no longer reports itself as the right button. It still rotates the view, but it can no longer complete the left + right chord.
 - A lost rendering surface is now recreated instead of only being reconfigured.
 - A lost GPU device no longer leaves the renderer unusable: all GPU resources are rebuilt on a new device and the session (camera, window placement, Mini-Globe, lockdown, clipboard vault) carries over.
 
