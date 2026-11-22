@@ -75,9 +75,9 @@ impl SphereCamera {
         }
     }
 
-    /// Smoothly returns to the center of the sphere.
-    pub fn reset_to_center(&mut self) {
-        self.target_position = Vec3::ZERO;
+    /// Smoothly returns to `home` (the center of the current galaxy) and levels the view.
+    pub fn reset_to(&mut self, home: Vec3) {
+        self.target_position = home;
         self.target_pitch = 0.0;
     }
 

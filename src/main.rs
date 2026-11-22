@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod camera;
+mod galaxy;
 mod minimap;
 mod security;
 mod sphere_env;
@@ -8,6 +9,7 @@ mod window3d;
 
 use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
+use galaxy::{Galaxy, GalaxyId, PRIME_GALAXY};
 use minimap::MiniGlobeHud;
 use security::{
     validate_surface_buffer, verify_shader_source_integrity, SecureClipboardVault,
@@ -141,6 +143,11 @@ struct XSphereRenderer {
 
     window_pipeline: wgpu::RenderPipeline,
     windows: Vec<WindowRenderEntry>,
+
+    /// Clusters of windows inside the universe (the outer sphere is the shape of the universe).
+    galaxies: Vec<Galaxy>,
+    /// Galaxy the viewer is currently in.
+    current_galaxy: GalaxyId,
 
     // Hardened Security Subsystem (secureblue + Qubes OS policies)
     security_policy: SecurityPolicy,
@@ -653,6 +660,15 @@ impl XSphereRenderer {
             ),
         ];
 
+        let galaxies = vec![Galaxy::prime()];
+        let home_galaxy = &galaxies[PRIME_GALAXY];
+        log::info!(
+            "Universe initialized with {} galaxy(ies); viewer starts in galaxy #{} '{}'",
+            galaxies.len(),
+            home_galaxy.id,
+            home_galaxy.name
+        );
+
         let mut windows = Vec::new();
         for (id, (title, trust_domain, azimuth, elevation, radius, ang_w, ang_h, variant)) in
             demo_specs.into_iter().enumerate()
@@ -714,8 +730,14 @@ impl XSphereRenderer {
                 ],
             });
 
-            let (verts, idxs) =
-                SphericalWindow::build_curved_mesh(azimuth, elevation, radius, ang_w, ang_h);
+            let (verts, idxs) = SphericalWindow::build_curved_mesh(
+                home_galaxy.center,
+                azimuth,
+                elevation,
+                radius,
+                ang_w,
+                ang_h,
+            );
 
             let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Window Curved Mesh VB"),
@@ -733,6 +755,8 @@ impl XSphereRenderer {
                     id,
                     title: title.to_string(),
                     trust_domain,
+                    galaxy: home_galaxy.id,
+                    origin: home_galaxy.center,
                     azimuth,
                     elevation,
                     radius,
@@ -775,6 +799,8 @@ impl XSphereRenderer {
             matrix_index_count: matrix_indices.len() as u32,
             window_pipeline,
             windows,
+            galaxies,
+            current_galaxy: PRIME_GALAXY,
             security_policy,
             clipboard_vault: SecureClipboardVault::new(),
             lockdown_active: false,
@@ -793,7 +819,12 @@ impl XSphereRenderer {
         self.camera = previous.camera;
         self.minimap = previous.minimap;
 
+        self.galaxies = previous.galaxies;
+        self.current_galaxy = previous.current_galaxy;
+
         for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
+            entry.win.galaxy = old.win.galaxy;
+            entry.win.origin = old.win.origin;
             entry.win.azimuth = old.win.azimuth;
             entry.win.elevation = old.win.elevation;
             entry.win.radius = old.win.radius;
@@ -813,6 +844,13 @@ impl XSphereRenderer {
         self.matrix_speed_mult = previous.matrix_speed_mult;
 
         self.interaction = previous.interaction;
+    }
+
+    /// Center of the galaxy the viewer is currently in, in universe coordinates.
+    fn current_galaxy_center(&self) -> glam::Vec3 {
+        self.galaxies
+            .get(self.current_galaxy)
+            .map_or(glam::Vec3::ZERO, |galaxy| galaxy.center)
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
@@ -1478,7 +1516,8 @@ impl ApplicationHandler for XSphereApp {
                                         !renderer.interaction.free_look_mode;
                                 }
                                 KeyCode::KeyR | KeyCode::Home => {
-                                    renderer.camera.reset_to_center();
+                                    let home = renderer.current_galaxy_center();
+                                    renderer.camera.reset_to(home);
                                     renderer.minimap.target_orb_yaw = 0.0;
                                     renderer.minimap.target_orb_pitch = 0.32;
                                 }
