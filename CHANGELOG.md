@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file. The format foll
 - Contribution guide, code of conduct, issue forms, and pull request template.
 - `Cargo.lock` is now tracked for reproducible builds.
 - Screenshot of the prototype in the README.
+- Public roadmap project board and `roadmap` issues, linked from the README.
 
 ### Changed
 

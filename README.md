@@ -187,6 +187,8 @@ The key extension point is the `WindowSurfaceProvider` trait in [`src/window3d.r
 
 ## Roadmap
 
+Planned work is tracked on the **[XSphereDE Roadmap project board](https://github.com/users/mendsec/projects/6)**, grouped by phase, and in issues with the [`roadmap`](https://github.com/mendsec/xspherede/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) label. The list below is a summary; the board is the source of truth for status.
+
 Done:
 
 - [x] Spherical workspace with 360° navigation and free flight
@@ -197,13 +199,13 @@ Done:
 
 Next:
 
-- [ ] Live window capture through PipeWire, as the first real `WindowSurfaceProvider`
-- [ ] Native Wayland compositor session built on Smithay, with zero-copy DMA-BUF textures
-- [ ] Per-domain process isolation, so trust domains map to real sandboxes
-- [ ] Input routing to client surfaces through a trusted input path
-- [ ] Polar docks and launchers on the upper and lower rings
+- [ ] Live window capture through PipeWire, as the first real `WindowSurfaceProvider` ([#21](https://github.com/mendsec/xspherede/issues/21))
+- [ ] Native Wayland compositor session built on Smithay, with zero-copy DMA-BUF textures ([#22](https://github.com/mendsec/xspherede/issues/22))
+- [ ] Per-domain process isolation, so trust domains map to real sandboxes ([#24](https://github.com/mendsec/xspherede/issues/24))
+- [ ] Input routing to client surfaces through a trusted input path ([#23](https://github.com/mendsec/xspherede/issues/23))
+- [ ] Polar docks and launchers on the upper and lower rings ([#25](https://github.com/mendsec/xspherede/issues/25))
 - [ ] Spatial file manager, currently a concept prototype in [XSphereDE Files](https://github.com/mendsec/xspherede-files)
-- [ ] Verified BSD support and distribution packaging
+- [ ] Verified BSD support ([#28](https://github.com/mendsec/xspherede/issues/28)) and distribution packaging ([#29](https://github.com/mendsec/xspherede/issues/29))
 
 ---
 
@@ -218,7 +220,7 @@ Next:
 Contributions are welcome, and the project is small enough that a first patch can land in an afternoon. Good places to start:
 
 - **Test on your system.** BSD, non-Mesa drivers, multi-monitor, and HiDPI reports are all valuable.
-- **Pick a roadmap item.** PipeWire capture and the Smithay session are the two that unlock everything else.
+- **Pick a roadmap item** from the [project board](https://github.com/users/mendsec/projects/6). PipeWire capture and the Smithay session are the two that unlock everything else; [`good first issue`](https://github.com/mendsec/xspherede/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) items are smaller entry points.
 - **Review the security model.** Design feedback from people who work on compositors, sandboxing, or hardened distributions is especially wanted. Use private reporting for anything sensitive.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and note the [Code of Conduct](CODE_OF_CONDUCT.md).
