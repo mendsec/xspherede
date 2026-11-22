@@ -104,22 +104,44 @@ pub fn spherical_to_local(azimuth: f32, elevation: f32, radius: f32) -> Vec3 {
     )
 }
 
+/// How a galaxy's halo grid is drawn.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum HaloStyle {
+    Hidden,
+    /// A faint, sparse outline that only shows where the galaxy is.
+    Beacon,
+    /// The full halo grid.
+    Full,
+}
+
 /// How much of a galaxy is drawn in the main view.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum GalaxyVisibility {
-    /// Not drawn at all.
-    Hidden,
-    /// A faint, sparse outline of the halo, to show where the galaxy is.
-    Beacon,
-    /// The full halo grid, without windows or code rain.
-    Halo,
-    /// Halo, windows, and code rain.
-    Populated,
+pub struct GalaxyVisibility {
+    pub halo: HaloStyle,
+    pub windows: bool,
+    pub rain: bool,
 }
 
 impl GalaxyVisibility {
-    pub fn shows_contents(self) -> bool {
-        self == Self::Populated
+    /// Not drawn at all.
+    pub const HIDDEN: Self = Self::new(HaloStyle::Hidden, false, false);
+    /// Only a faint outline.
+    pub const BEACON: Self = Self::new(HaloStyle::Beacon, false, false);
+    /// The full halo, without windows or code rain.
+    pub const HALO: Self = Self::new(HaloStyle::Full, false, false);
+    /// Halo, windows, and code rain: the galaxy you are in.
+    pub const POPULATED: Self = Self::new(HaloStyle::Full, true, true);
+    /// Halo and windows without code rain: a galaxy seen from the overview.
+    pub const MAPPED: Self = Self::new(HaloStyle::Full, true, false);
+    /// A faint outline with its windows: an overview galaxy out of the spotlight.
+    pub const DIMMED: Self = Self::new(HaloStyle::Beacon, true, false);
+
+    const fn new(halo: HaloStyle, windows: bool, rain: bool) -> Self {
+        Self {
+            halo,
+            windows,
+            rain,
+        }
     }
 }
 
@@ -136,13 +158,21 @@ pub struct ViewContext {
     pub aim: Option<GalaxyId>,
     /// The galaxy being flown to.
     pub destination: Option<GalaxyId>,
+    /// Whether the Cosmic Zoom-Out overview is open.
+    pub overview: bool,
+    /// The galaxy under the pointer in the overview; the others are dimmed.
+    pub spotlight: Option<GalaxyId>,
 }
 
 impl ViewContext {
     /// Whether the rest of the universe should be revealed. Inside a galaxy it is not:
-    /// other galaxies only appear while aiming a warp, while flying, or in deep space.
+    /// other galaxies only appear in the overview, while aiming a warp, while flying,
+    /// or in deep space.
     pub fn reveals_universe(&self) -> bool {
-        self.aiming || self.destination.is_some() || self.home != Some(self.current)
+        self.overview
+            || self.aiming
+            || self.destination.is_some()
+            || self.home != Some(self.current)
     }
 
     /// Visibility of every galaxy, indexed by id.
@@ -150,14 +180,19 @@ impl ViewContext {
         let reveal = self.reveals_universe();
         (0..count)
             .map(|id| {
-                if id == self.current || Some(id) == self.destination {
-                    GalaxyVisibility::Populated
+                if self.overview {
+                    match self.spotlight {
+                        Some(spot) if spot != id => GalaxyVisibility::DIMMED,
+                        _ => GalaxyVisibility::MAPPED,
+                    }
+                } else if id == self.current || Some(id) == self.destination {
+                    GalaxyVisibility::POPULATED
                 } else if self.aiming && Some(id) == self.aim {
-                    GalaxyVisibility::Halo
+                    GalaxyVisibility::HALO
                 } else if reveal {
-                    GalaxyVisibility::Beacon
+                    GalaxyVisibility::BEACON
                 } else {
-                    GalaxyVisibility::Hidden
+                    GalaxyVisibility::HIDDEN
                 }
             })
             .collect()
@@ -179,9 +214,9 @@ mod tests {
         assert_eq!(
             view.galaxy_visibility(3),
             vec![
-                GalaxyVisibility::Hidden,
-                GalaxyVisibility::Populated,
-                GalaxyVisibility::Hidden
+                GalaxyVisibility::HIDDEN,
+                GalaxyVisibility::POPULATED,
+                GalaxyVisibility::HIDDEN
             ]
         );
     }
@@ -193,17 +228,35 @@ mod tests {
             home: Some(0),
             aiming: true,
             aim: Some(2),
-            destination: None,
+            ..ViewContext::default()
         };
         assert!(view.reveals_universe());
         assert_eq!(
             view.galaxy_visibility(3),
             vec![
-                GalaxyVisibility::Populated,
-                GalaxyVisibility::Beacon,
-                GalaxyVisibility::Halo
+                GalaxyVisibility::POPULATED,
+                GalaxyVisibility::BEACON,
+                GalaxyVisibility::HALO
             ]
         );
+    }
+
+    #[test]
+    fn test_overview_maps_every_galaxy_and_spotlights_the_hovered_one() {
+        let mut view = ViewContext {
+            current: 0,
+            home: None,
+            overview: true,
+            ..ViewContext::default()
+        };
+        assert_eq!(view.galaxy_visibility(2), vec![GalaxyVisibility::MAPPED; 2]);
+        view.spotlight = Some(1);
+        assert_eq!(
+            view.galaxy_visibility(2),
+            vec![GalaxyVisibility::DIMMED, GalaxyVisibility::MAPPED]
+        );
+        // No galaxy shows code rain in the overview.
+        assert!(view.galaxy_visibility(2).iter().all(|v| !v.rain));
     }
 
     #[test]
@@ -217,9 +270,9 @@ mod tests {
         assert_eq!(
             flight.galaxy_visibility(3),
             vec![
-                GalaxyVisibility::Populated,
-                GalaxyVisibility::Beacon,
-                GalaxyVisibility::Populated
+                GalaxyVisibility::POPULATED,
+                GalaxyVisibility::BEACON,
+                GalaxyVisibility::POPULATED
             ]
         );
         let deep_space = ViewContext {
@@ -230,7 +283,7 @@ mod tests {
         assert!(deep_space.reveals_universe());
         assert_eq!(
             deep_space.galaxy_visibility(2),
-            vec![GalaxyVisibility::Populated, GalaxyVisibility::Beacon]
+            vec![GalaxyVisibility::POPULATED, GalaxyVisibility::BEACON]
         );
     }
 

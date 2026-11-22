@@ -50,7 +50,7 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - **Spatial workspaces without a headset.** A sphere gives you far more usable surface than a flat plane, with depth as a third axis for arranging work, on ordinary monitors and ordinary GPUs.
 - **Isolation you can see.** Borrowing from the Qubes OS model, a window's trust level is part of the desktop's visual language and is drawn by the compositor, never by the application.
 - **Hardened defaults, not hardened options.** The policy baseline follows the direction set by projects such as secureblue: no Xwayland, no automatic thumbnailers, no third-party code inside the compositor.
-- **A small, auditable codebase.** About 4,800 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
+- **A small, auditable codebase.** About 5,600 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
 
 ---
 
@@ -71,6 +71,7 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - Flying into another galaxy's halo by hand also makes it the current galaxy.
 - Inside a galaxy, only that galaxy is drawn. The universe boundary and other galaxies appear as faint outlines only while you aim a warp, during a flight, or in deep space.
 - Space warp: hold the left and right mouse buttons together and drag to turn toward another galaxy. When its halo sits at the center of the view, release either button to warp there. A short drag or `Esc` cancels, so pressing both buttons by accident never leaves the galaxy.
+- Cosmic Zoom-Out (`U`): the camera pulls straight back until the whole universe is in view, then orbits it. Every galaxy shows its halo and live windows, without code rain. Windows of the same trust domain are linked across galaxies, like the edges of a graph view, so you can see at a glance where each domain lives. Hovering a galaxy dims the others and its links. Click a galaxy to dive in, click a window to dive in and focus it, or drag a window onto another galaxy to move it there.
 - Start the chord while dragging a window to carry that window along. It keeps its trust domain and its placement, and stays focused on arrival.
 - Keyboard focus is cleared on arrival, so traveling never silently moves focus into another trust domain.
 
@@ -182,10 +183,14 @@ Spheradian type-checks for OpenBSD in CI but has not been run there yet, so thes
 | Travel to galaxy 1 to 9 | `Ctrl` + `1` … `9` |
 | Space warp to the galaxy in view | Hold left + right buttons, drag until it locks, release |
 | Carry a window through a warp | Drag the window, then press the right button too |
+| Cosmic Zoom-Out: see the whole universe | `U` (again, or `Esc`, to dive back) |
+| In the overview: orbit, zoom | Drag, scroll |
+| In the overview: dive into a galaxy or window | Click it |
+| In the overview: move a window to another galaxy | Drag it onto that galaxy |
 | Recenter in the current galaxy | `R` or `Home` |
 | Toggle code rain speed | `M` |
 | Toggle fullscreen | `F11` or `F` |
-| Cancel a warp, collapse the Mini-Globe, or exit | `Esc` |
+| Leave the overview, cancel a warp, collapse the Mini-Globe, or exit | `Esc` |
 
 ---
 
@@ -201,6 +206,7 @@ spheradian/
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting
     ├── galaxy.rs       # Galaxy: window clusters, universe and galaxy radii, demo universe
     ├── warp.rs         # WarpGesture: left + right mouse chord and galaxy aiming
+    ├── overview.rs     # CosmicOverview: universe orbit, galaxy picking, trust links
     ├── window3d.rs     # SphericalWindow: curved meshes, spherical raycasting, WindowSurfaceProvider
     ├── minimap.rs      # MiniGlobeHud: interactive, expandable overview globe
     ├── sphere_env.rs   # Geodesic grid and code rain volume generation
@@ -224,6 +230,7 @@ Done:
 - [x] Trust domains, clipboard vault, lockdown mode, and host audit
 - [x] Volumetric code rain with reading cone and per-window shield
 - [x] Galaxies of windows across a closed universe, with keyboard and space warp travel between them
+- [x] Cosmic Zoom-Out overview of the universe with trust-domain links between galaxies
 
 Next:
 

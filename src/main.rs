@@ -3,6 +3,7 @@
 mod camera;
 mod galaxy;
 mod minimap;
+mod overview;
 mod security;
 mod sphere_env;
 mod warp;
@@ -12,9 +13,10 @@ use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
 use galaxy::{
     cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GalaxyVisibility,
-    ViewContext, GALAXY_RADIUS, PRIME_GALAXY, UNIVERSE_RADIUS,
+    HaloStyle, ViewContext, GALAXY_RADIUS, PRIME_GALAXY, UNIVERSE_RADIUS,
 };
 use minimap::MiniGlobeHud;
+use overview::{pick_galaxy, trust_links, CosmicOverview};
 use security::{
     validate_surface_buffer, verify_shader_source_integrity, SecureClipboardVault,
     SecurityAuditReport, SecurityPolicy, TrustDomain,
@@ -75,7 +77,21 @@ struct InteractionState {
     minimap_drag_distance: f32,
     /// Left + right mouse chord for intergalactic travel.
     warp: WarpGesture,
+    /// Button press in the Cosmic Zoom-Out overview, until it is released.
+    overview_press: Option<OverviewPress>,
 }
+
+/// A pointer press inside the Cosmic Zoom-Out overview.
+#[derive(Copy, Clone, Debug, PartialEq)]
+struct OverviewPress {
+    /// Window under the pointer when the left button was pressed: dragging moves it.
+    window: Option<usize>,
+    /// Pointer travel since the press, to tell a click from a drag.
+    travel_px: f32,
+}
+
+/// Pointer travel below which a press and release count as a click.
+const CLICK_SLOP_PX: f32 = 6.0;
 
 impl InteractionState {
     fn new(width: u32, height: u32) -> Self {
@@ -95,6 +111,7 @@ impl InteractionState {
             minimap_dragging: false,
             minimap_drag_distance: 0.0,
             warp: WarpGesture::default(),
+            overview_press: None,
         }
     }
 
@@ -110,6 +127,7 @@ impl InteractionState {
         self.dragging_window = None;
         self.minimap_dragging = false;
         self.warp.cancel();
+        self.overview_press = None;
     }
 }
 
@@ -175,6 +193,15 @@ struct SpheradianRenderer {
     galaxy_visibility: Vec<GalaxyVisibility>,
     /// Whether the main view shows the universe boundary and other galaxies.
     universe_revealed: bool,
+    /// Window to focus when the current flight arrives (picked in the overview).
+    travel_focus: Option<usize>,
+    /// The Cosmic Zoom-Out overview of the whole universe.
+    overview: CosmicOverview,
+    /// Galaxy under the pointer in the overview; the others are dimmed.
+    overview_spotlight: Option<GalaxyId>,
+    /// Trust links between windows, drawn as lines in the overview.
+    constellation_buffer: wgpu::Buffer,
+    constellation_vertex_count: u32,
     /// Armed state last shown in the space warp hint, to avoid retitling every frame.
     warp_hint_shown: Option<bool>,
 
@@ -911,6 +938,14 @@ impl SpheradianRenderer {
         }
 
         let now = Instant::now();
+        // Room for one trust link per window (a chain has fewer links than windows).
+        let constellation_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Trust Constellation Vertex Buffer"),
+            size: (windows.len().max(1) * 2 * std::mem::size_of::<GridVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Ok(Self {
             window,
             instance,
@@ -949,6 +984,11 @@ impl SpheradianRenderer {
             }
             .galaxy_visibility(galaxy_count),
             universe_revealed: false,
+            travel_focus: None,
+            overview: CosmicOverview::default(),
+            overview_spotlight: None,
+            constellation_buffer,
+            constellation_vertex_count: 0,
             warp_hint_shown: None,
             security_policy,
             clipboard_vault: SecureClipboardVault::new(),
@@ -972,6 +1012,8 @@ impl SpheradianRenderer {
         self.current_galaxy = previous.current_galaxy;
         self.travel_destination = previous.travel_destination;
         self.travel_cargo = previous.travel_cargo;
+        self.travel_focus = previous.travel_focus;
+        self.overview = previous.overview;
 
         for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
             entry.win.galaxy = old.win.galaxy;
@@ -1022,7 +1064,7 @@ impl SpheradianRenderer {
     /// Title shown when nothing is hovered.
     fn idle_title(&self) -> String {
         format!(
-            "Spheradian v{} — Galaxy {} | Ctrl+PgUp/PgDn or Ctrl+1-9: Travel | Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe",
+            "Spheradian v{} — Galaxy {} | U: Cosmic Zoom-Out | Ctrl+PgUp/PgDn or Ctrl+1-9: Travel | Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe",
             env!("CARGO_PKG_VERSION"),
             self.galaxy_label(self.current_galaxy)
         )
@@ -1030,10 +1072,11 @@ impl SpheradianRenderer {
 
     /// Starts an intergalactic flight to the center of `destination`.
     fn travel_to_galaxy(&mut self, destination: GalaxyId) {
-        let Some(galaxy) = self.galaxies.get(destination) else {
+        let Some(center) = self.galaxies.get(destination).map(|galaxy| galaxy.center) else {
             return;
         };
-        let center = galaxy.center;
+        self.leave_overview();
+        self.travel_focus = None;
         let msg = format!(
             "Spheradian — Traveling to galaxy {}…",
             self.galaxy_label(destination)
@@ -1063,6 +1106,7 @@ impl SpheradianRenderer {
             || on_minimap
             || input.minimap_dragging
             || input.warp.is_active()
+            || self.overview.is_active()
         {
             return false;
         }
@@ -1131,19 +1175,25 @@ impl SpheradianRenderer {
     ///
     /// Focus is cleared on arrival rather than handed to a window of the new galaxy, so
     /// that traveling never silently moves keyboard or clipboard focus across trust domains.
-    fn arrive_at_galaxy(&mut self, galaxy: GalaxyId, cargo: Option<usize>) {
+    /// The only exceptions are windows the user explicitly chose: `cargo`, carried along by
+    /// the warp chord, and `chosen`, clicked in the overview.
+    fn arrive_at_galaxy(&mut self, galaxy: GalaxyId, cargo: Option<usize>, chosen: Option<usize>) {
         self.set_current_galaxy(galaxy);
         self.interaction.focused_window = None;
-        let center = self.current_galaxy_center();
         // A carried window keeps its trust domain and its spherical placement; only its
-        // galaxy changes. It stays focused because the user explicitly brought it along.
-        if let Some(entry) = cargo.and_then(|idx| self.windows.get_mut(idx)) {
-            entry.win.galaxy = galaxy;
-            entry.win.origin = center;
-            entry.win.update_geometry(&self.queue);
-            self.interaction.focused_window = cargo;
+        // galaxy changes.
+        if let Some(idx) = cargo {
+            self.move_window_to_galaxy(idx, galaxy);
         }
-        let look_at = cargo
+        let chosen = cargo.or(chosen).filter(|&idx| {
+            self.windows
+                .get(idx)
+                .is_some_and(|e| e.win.galaxy == galaxy)
+        });
+        if chosen.is_some() {
+            self.interaction.focused_window = chosen;
+        }
+        let look_at = chosen
             .and_then(|idx| self.windows.get(idx))
             .or_else(|| self.windows.iter().find(|entry| entry.win.galaxy == galaxy))
             .map(|entry| entry.win.world_center());
@@ -1158,6 +1208,227 @@ impl SpheradianRenderer {
         self.window.set_title(&msg);
     }
 
+    /// Moves a window into another galaxy. It keeps its trust domain and its spherical
+    /// placement around the galaxy center.
+    fn move_window_to_galaxy(&mut self, idx: usize, galaxy: GalaxyId) -> bool {
+        let Some(center) = self.galaxies.get(galaxy).map(|g| g.center) else {
+            return false;
+        };
+        let Some(entry) = self.windows.get_mut(idx) else {
+            return false;
+        };
+        entry.win.galaxy = galaxy;
+        entry.win.origin = center;
+        entry.win.update_geometry(&self.queue);
+        true
+    }
+
+    /// Opens the Cosmic Zoom-Out: the camera pulls straight back until every galaxy is in view.
+    fn open_overview(&mut self) {
+        if self.overview.is_active() {
+            return;
+        }
+        self.interaction.warp.cancel();
+        self.interaction.dragging_window = None;
+        self.interaction.overview_press = None;
+        self.travel_destination = None;
+        self.travel_cargo = None;
+        self.travel_focus = None;
+        self.minimap.expanded = false;
+        self.overview.open(
+            &self.galaxies,
+            self.camera.target_yaw,
+            self.camera.target_pitch,
+            self.camera.base_fov_y_radians,
+            self.camera.aspect,
+        );
+        let reach = self.overview.max_reach() + GALAXY_RADIUS;
+        self.camera.bounds_radius = reach;
+        self.camera.far = reach * 2.0 + UNIVERSE_RADIUS;
+        self.camera.near = 0.5;
+        self.camera.fly_to(self.overview.eye());
+        self.overview_spotlight = None;
+        log::info!("Cosmic Zoom-Out opened");
+        self.window.set_title(&self.overview_title());
+    }
+
+    /// Closes the overview and restores the camera limits used inside the universe.
+    /// Callers then fly somewhere, usually into a galaxy.
+    fn leave_overview(&mut self) {
+        if !self.overview.is_active() {
+            return;
+        }
+        self.overview.close();
+        self.overview_spotlight = None;
+        self.interaction.overview_press = None;
+        self.interaction.hovered_window = None;
+        self.camera.bounds_radius = UNIVERSE_RADIUS - 4.0;
+        self.camera.far = UNIVERSE_RADIUS * 2.5;
+        self.camera.near = 0.1;
+    }
+
+    /// Title bar text for the overview, describing what is under the pointer.
+    fn overview_title(&self) -> String {
+        let prefix = "Spheradian [COSMIC ZOOM-OUT]";
+        let dragged = self
+            .interaction
+            .overview_press
+            .filter(|press| press.travel_px >= CLICK_SLOP_PX)
+            .and_then(|press| press.window)
+            .and_then(|idx| self.windows.get(idx));
+        if let Some(entry) = dragged {
+            let drop = match self.overview_spotlight {
+                Some(g) if g != entry.win.galaxy => {
+                    format!("release to move it to {}", self.galaxy_label(g))
+                }
+                _ => "release over another galaxy to move it there".to_string(),
+            };
+            return format!(
+                "{prefix} — Moving [{}] {} | {drop}",
+                entry.win.trust_domain.badge_label(),
+                entry.win.title
+            );
+        }
+        if let Some(entry) = self
+            .interaction
+            .hovered_window
+            .and_then(|idx| self.windows.get(idx))
+        {
+            return format!(
+                "{prefix} — [{}] {} in {} | Click: dive in and focus it · Drag onto a galaxy: move it",
+                entry.win.trust_domain.badge_label(),
+                entry.win.title,
+                self.galaxy_label(entry.win.galaxy)
+            );
+        }
+        if let Some(galaxy) = self.overview_spotlight {
+            let mut domains: Vec<_> = self
+                .windows
+                .iter()
+                .filter(|entry| entry.win.galaxy == galaxy)
+                .map(|entry| entry.win.trust_domain)
+                .collect();
+            let count = domains.len();
+            domains.sort();
+            domains.dedup();
+            let badges: Vec<_> = domains.iter().rev().map(|d| d.badge_label()).collect();
+            return format!(
+                "{prefix} — Galaxy {}: {count} window(s) · {} | Click: dive in",
+                self.galaxy_label(galaxy),
+                if badges.is_empty() {
+                    "empty".to_string()
+                } else {
+                    badges.join(" ")
+                }
+            );
+        }
+        format!(
+            "{prefix} — {} galaxies | Drag: orbit · Scroll: zoom · Click a galaxy: dive in · U/Esc: back",
+            self.galaxies.len()
+        )
+    }
+
+    /// Pointer motion in the overview: orbits, or drags a window toward another galaxy.
+    fn overview_pointer_moved(&mut self, dx: f32, dy: f32) {
+        let Some(press) = self.interaction.overview_press.as_mut() else {
+            return;
+        };
+        press.travel_px += (dx * dx + dy * dy).sqrt();
+        if press.window.is_none() {
+            self.overview.orbit(dx, dy);
+        } else if press.travel_px >= CLICK_SLOP_PX {
+            self.window.set_title(&self.overview_title());
+        }
+    }
+
+    /// Mouse buttons in the overview. A click dives into a galaxy (focusing the clicked
+    /// window, if any); dragging empty space orbits; dragging a window onto another
+    /// galaxy moves it there.
+    fn overview_button(&mut self, button: MouseButton, pressed: bool) {
+        match button {
+            MouseButton::Left => self.interaction.left_mouse_down = pressed,
+            MouseButton::Right => self.interaction.right_mouse_down = pressed,
+            MouseButton::Middle => self.interaction.middle_mouse_down = pressed,
+            _ => return,
+        }
+        if pressed {
+            if self.interaction.overview_press.is_none() {
+                let window = if button == MouseButton::Left {
+                    self.interaction.hovered_window
+                } else {
+                    None
+                };
+                self.interaction.overview_press = Some(OverviewPress {
+                    window,
+                    travel_px: 0.0,
+                });
+            }
+            return;
+        }
+        let Some(press) = self.interaction.overview_press.take() else {
+            return;
+        };
+        if press.travel_px < CLICK_SLOP_PX {
+            if let Some(idx) = self.interaction.hovered_window {
+                let galaxy = self.windows[idx].win.galaxy;
+                self.travel_to_galaxy(galaxy);
+                self.travel_focus = Some(idx);
+            } else if let Some(galaxy) = self.overview_spotlight {
+                self.travel_to_galaxy(galaxy);
+            }
+        } else if let Some(idx) = press.window {
+            let from = self.windows[idx].win.galaxy;
+            if let Some(to) = self.overview_spotlight.filter(|&g| g != from) {
+                if self.move_window_to_galaxy(idx, to) {
+                    log::info!(
+                        "Moved window '{}' from {} to {}",
+                        self.windows[idx].win.title,
+                        self.galaxy_label(from),
+                        self.galaxy_label(to)
+                    );
+                }
+            }
+            self.window.set_title(&self.overview_title());
+        }
+    }
+
+    /// Rebuilds the trust constellation lines between windows of the same trust domain.
+    fn update_constellations(&mut self) {
+        let nodes: Vec<_> = self
+            .windows
+            .iter()
+            .map(|entry| (entry.win.trust_domain, entry.win.galaxy))
+            .collect();
+        let spotlight = self.overview_spotlight;
+        let mut vertices = Vec::new();
+        for (a, b) in trust_links(&nodes) {
+            let (wa, wb) = (&self.windows[a].win, &self.windows[b].win);
+            let [r, g, bl] = wa.trust_domain.border_color_rgb();
+            let alpha = match spotlight {
+                None => 0.7,
+                Some(spot) if wa.galaxy == spot || wb.galaxy == spot => 0.95,
+                Some(_) => 0.08,
+            };
+            for point in [wa.world_center(), wb.world_center()] {
+                vertices.push(GridVertex {
+                    position: point.to_array(),
+                    color: [r, g, bl, alpha],
+                });
+            }
+        }
+        let capacity =
+            (self.constellation_buffer.size() / std::mem::size_of::<GridVertex>() as u64) as usize;
+        vertices.truncate(capacity - capacity % 2);
+        if !vertices.is_empty() {
+            self.queue.write_buffer(
+                &self.constellation_buffer,
+                0,
+                bytemuck::cast_slice(&vertices),
+            );
+        }
+        self.constellation_vertex_count = vertices.len() as u32;
+    }
+
     /// Decides how much of each galaxy the main view draws this frame.
     fn update_galaxy_visibility(&mut self) {
         let view = ViewContext {
@@ -1166,16 +1437,18 @@ impl SpheradianRenderer {
             aiming: self.interaction.warp.is_active(),
             aim: self.interaction.warp.target(),
             destination: self.travel_destination,
+            overview: self.overview.is_active(),
+            spotlight: self.overview_spotlight,
         };
         self.universe_revealed = view.reveals_universe();
         self.galaxy_visibility = view.galaxy_visibility(self.galaxies.len());
     }
 
-    /// Whether the windows and code rain of `galaxy` are drawn in the main view.
-    fn shows_galaxy_contents(&self, galaxy: GalaxyId) -> bool {
+    /// Whether the windows of `galaxy` are drawn (and can be pointed at) in the main view.
+    fn shows_galaxy_windows(&self, galaxy: GalaxyId) -> bool {
         self.galaxy_visibility
             .get(galaxy)
-            .is_some_and(|visibility| visibility.shows_contents())
+            .is_some_and(|visibility| visibility.windows)
     }
 
     /// Makes `galaxy` the current one and points the Mini-Globe at it.
@@ -1248,12 +1521,13 @@ impl SpheradianRenderer {
         let h = self.config.height.max(1);
 
         // 1. First check whether the mouse cursor is hovering over the Mini-Globe
-        self.minimap.is_hovered = self.minimap.contains_cursor(
-            self.interaction.cursor_pos.0,
-            self.interaction.cursor_pos.1,
-            w,
-            h,
-        );
+        self.minimap.is_hovered = !self.overview.is_active()
+            && self.minimap.contains_cursor(
+                self.interaction.cursor_pos.0,
+                self.interaction.cursor_pos.1,
+                w,
+                h,
+            );
 
         if self.minimap.is_hovered {
             let hovered_win = self.raycast_window_in_minimap(
@@ -1292,7 +1566,7 @@ impl SpheradianRenderer {
             let mut best_hit: Option<(usize, f32)> = None;
             for (idx, entry) in self.windows.iter().enumerate() {
                 // Windows that are not drawn cannot be hovered or clicked.
-                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                if !self.shows_galaxy_windows(entry.win.galaxy) {
                     continue;
                 }
                 if let Some(t) = entry.win.intersect_ray(ray_origin, ray_dir) {
@@ -1302,8 +1576,18 @@ impl SpheradianRenderer {
                 }
             }
 
-            if self.interaction.hovered_window != best_hit.map(|(idx, _)| idx) {
-                self.interaction.hovered_window = best_hit.map(|(idx, _)| idx);
+            let hit = best_hit.map(|(idx, _)| idx);
+            if self.overview.is_active() {
+                let spotlight = hit
+                    .map(|idx| self.windows[idx].win.galaxy)
+                    .or_else(|| pick_galaxy(&self.galaxies, ray_origin, ray_dir));
+                if hit != self.interaction.hovered_window || spotlight != self.overview_spotlight {
+                    self.interaction.hovered_window = hit;
+                    self.overview_spotlight = spotlight;
+                    self.window.set_title(&self.overview_title());
+                }
+            } else if self.interaction.hovered_window != hit {
+                self.interaction.hovered_window = hit;
                 if self.interaction.warp.is_active() {
                     // The space warp hint owns the title while the chord is held.
                 } else if let Some(idx) = self.interaction.hovered_window {
@@ -1395,19 +1679,27 @@ impl SpheradianRenderer {
             up -= speed;
         }
 
-        if fwd != 0.0 || right != 0.0 || up != 0.0 {
+        if self.overview.is_active() {
+            // The overview camera orbits the universe; it looks along the orbit direction.
+            self.camera.target_yaw = self.overview.yaw;
+            self.camera.target_pitch = self.overview.pitch;
+            if !self.camera.is_flying() {
+                self.camera.target_position = self.overview.eye();
+            }
+        } else if fwd != 0.0 || right != 0.0 || up != 0.0 {
             self.camera.translate_local(fwd, right, up);
         }
 
         self.camera.update(dt);
-        if !self.camera.is_flying() {
+        if !self.camera.is_flying() && !self.overview.is_active() {
             if let Some(destination) = self.travel_destination.take() {
                 let cargo = self.travel_cargo.take();
+                let chosen = self.travel_focus.take();
                 let center = self.galaxies.get(destination).map(|g| g.center);
                 // A flight interrupted by manual movement does not count as an arrival,
                 // and a carried window stays where it was.
                 if center.is_some_and(|c| c.distance(self.camera.position) < 0.5) {
-                    self.arrive_at_galaxy(destination, cargo);
+                    self.arrive_at_galaxy(destination, cargo, chosen);
                 }
             }
             // Flying by hand into another galaxy's halo makes it the current galaxy.
@@ -1422,6 +1714,9 @@ impl SpheradianRenderer {
         self.update_warp_aim();
         self.update_galaxy_visibility();
         self.update_raycast_hover();
+        if self.overview.is_active() {
+            self.update_constellations();
+        }
 
         let elapsed = (now - self.start_time).as_secs_f32();
         let cam_fwd = self.camera.forward();
@@ -1600,23 +1895,26 @@ impl SpheradianRenderer {
                 rpass.draw(self.universe_grid_range.clone(), 0..1);
             }
             for (id, visibility) in self.galaxy_visibility.iter().enumerate() {
-                let range = match visibility {
-                    GalaxyVisibility::Hidden => None,
-                    GalaxyVisibility::Beacon => self.galaxy_beacon_ranges.get(id),
-                    GalaxyVisibility::Halo | GalaxyVisibility::Populated => {
-                        self.galaxy_grid_ranges.get(id)
-                    }
+                let range = match visibility.halo {
+                    HaloStyle::Hidden => None,
+                    HaloStyle::Beacon => self.galaxy_beacon_ranges.get(id),
+                    HaloStyle::Full => self.galaxy_grid_ranges.get(id),
                 };
                 if let Some(range) = range {
                     rpass.draw(range.clone(), 0..1);
                 }
+            }
+            // Trust constellations: windows of one trust domain linked across the universe.
+            if self.overview.is_active() && self.constellation_vertex_count > 0 {
+                rpass.set_vertex_buffer(0, self.constellation_buffer.slice(..));
+                rpass.draw(0..self.constellation_vertex_count, 0..1);
             }
 
             // 2. Draw curved 3D windows on the sphere
             rpass.set_pipeline(&self.window_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             for entry in &self.windows {
-                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                if !self.shows_galaxy_windows(entry.win.galaxy) {
                     continue;
                 }
                 rpass.set_bind_group(1, &entry.win.bind_group, &[]);
@@ -1634,7 +1932,7 @@ impl SpheradianRenderer {
                 wgpu::IndexFormat::Uint32,
             );
             for (id, range) in self.galaxy_matrix_ranges.iter().enumerate() {
-                if self.shows_galaxy_contents(id) {
+                if self.galaxy_visibility.get(id).is_some_and(|v| v.rain) {
                     rpass.draw_indexed(range.clone(), 0, 0..1);
                 }
             }
@@ -1645,7 +1943,11 @@ impl SpheradianRenderer {
             let (hx, hy, hsize) = self
                 .minimap
                 .viewport_rect(self.config.width, self.config.height);
-            if hx + hsize <= self.config.width as f32 && hy + hsize <= self.config.height as f32 {
+            // The Mini-Globe shows one galaxy, so it steps aside in the overview.
+            if !self.overview.is_active()
+                && hx + hsize <= self.config.width as f32
+                && hy + hsize <= self.config.height as f32
+            {
                 rpass.set_viewport(hx, hy, hsize, hsize, 0.0, 1.0);
 
                 // 4a. Background holographic orb (also resets the Mini-Globe depth buffer to 0.999)
@@ -1821,7 +2123,10 @@ impl ApplicationHandler for SpheradianApp {
                             renderer.interaction.keys_pressed.insert(code);
                             match code {
                                 KeyCode::Escape => {
-                                    if renderer.interaction.warp.is_active() {
+                                    if renderer.overview.is_active() {
+                                        let home = renderer.current_galaxy;
+                                        renderer.travel_to_galaxy(home);
+                                    } else if renderer.interaction.warp.is_active() {
                                         renderer.cancel_warp_chord();
                                     } else if renderer.minimap.expanded {
                                         renderer.minimap.expanded = false;
@@ -1922,6 +2227,15 @@ impl ApplicationHandler for SpheradianApp {
                                 KeyCode::KeyG => {
                                     renderer.minimap.toggle_expanded();
                                 }
+                                // Cosmic Zoom-Out: see the whole universe, or dive back in
+                                KeyCode::KeyU => {
+                                    if renderer.overview.is_active() {
+                                        let home = renderer.current_galaxy;
+                                        renderer.travel_to_galaxy(home);
+                                    } else {
+                                        renderer.open_overview();
+                                    }
+                                }
                                 // Intergalactic travel: Ctrl + PageUp / PageDown cycles galaxies
                                 KeyCode::PageUp | KeyCode::PageDown
                                     if renderer.interaction.ctrl_held =>
@@ -1987,8 +2301,10 @@ impl ApplicationHandler for SpheradianApp {
                 );
 
                 let pressed = state == ElementState::Pressed;
+                let on_minimap = on_minimap && !renderer.overview.is_active();
 
                 match button {
+                    _ if renderer.overview.is_active() => renderer.overview_button(button, pressed),
                     MouseButton::Middle => {
                         if pressed && on_minimap {
                             renderer.minimap.toggle_expanded();
@@ -2052,7 +2368,9 @@ impl ApplicationHandler for SpheradianApp {
 
                     renderer.interaction.warp.add_drag(dx, dy);
 
-                    if renderer.interaction.minimap_dragging {
+                    if renderer.overview.is_active() {
+                        renderer.overview_pointer_moved(dx, dy);
+                    } else if renderer.interaction.minimap_dragging {
                         let step_dist = (dx * dx + dy * dy).sqrt();
                         renderer.interaction.minimap_drag_distance += step_dist;
                         // Dragging inside the Mini-Globe rotates the 3D globe
@@ -2091,7 +2409,9 @@ impl ApplicationHandler for SpheradianApp {
 
                 // If the cursor is over a window (in the main scene OR inside the Mini-Globe)
                 // or if Shift is held, scrolling adjusts the radial depth of the window inside the globe
-                if let Some(win_idx) =
+                if renderer.overview.is_active() {
+                    renderer.overview.zoom_by(scroll_y);
+                } else if let Some(win_idx) =
                     renderer
                         .interaction
                         .hovered_window
@@ -2216,6 +2536,10 @@ mod tests {
             minimap_dragging: true,
             minimap_drag_distance: 42.0,
             warp: WarpGesture::default(),
+            overview_press: Some(OverviewPress {
+                window: Some(1),
+                travel_px: 3.0,
+            }),
         };
         state.warp.begin(Some(1));
         state.warp.add_drag(100.0, 0.0);
@@ -2232,6 +2556,7 @@ mod tests {
         assert!(!state.middle_mouse_down);
         // A chord interrupted by a lost device must never fire later.
         assert!(!state.warp.is_active());
+        assert_eq!(state.overview_press, None);
         assert_eq!(state.warp.release(), None);
 
         // Session toggles and non-held pointer/focus state should remain intact.
