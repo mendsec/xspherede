@@ -104,9 +104,135 @@ pub fn spherical_to_local(azimuth: f32, elevation: f32, radius: f32) -> Vec3 {
     )
 }
 
+/// How much of a galaxy is drawn in the main view.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum GalaxyVisibility {
+    /// Not drawn at all.
+    Hidden,
+    /// A faint, sparse outline of the halo, to show where the galaxy is.
+    Beacon,
+    /// The full halo grid, without windows or code rain.
+    Halo,
+    /// Halo, windows, and code rain.
+    Populated,
+}
+
+impl GalaxyVisibility {
+    pub fn shows_contents(self) -> bool {
+        self == Self::Populated
+    }
+}
+
+/// What the viewer needs to see of the universe right now.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ViewContext {
+    /// The galaxy the viewer works in.
+    pub current: GalaxyId,
+    /// The galaxy whose halo contains the camera, if any.
+    pub home: Option<GalaxyId>,
+    /// Whether the space warp chord is held.
+    pub aiming: bool,
+    /// The galaxy the warp chord is locked on.
+    pub aim: Option<GalaxyId>,
+    /// The galaxy being flown to.
+    pub destination: Option<GalaxyId>,
+}
+
+impl ViewContext {
+    /// Whether the rest of the universe should be revealed. Inside a galaxy it is not:
+    /// other galaxies only appear while aiming a warp, while flying, or in deep space.
+    pub fn reveals_universe(&self) -> bool {
+        self.aiming || self.destination.is_some() || self.home != Some(self.current)
+    }
+
+    /// Visibility of every galaxy, indexed by id.
+    pub fn galaxy_visibility(&self, count: usize) -> Vec<GalaxyVisibility> {
+        let reveal = self.reveals_universe();
+        (0..count)
+            .map(|id| {
+                if id == self.current || Some(id) == self.destination {
+                    GalaxyVisibility::Populated
+                } else if self.aiming && Some(id) == self.aim {
+                    GalaxyVisibility::Halo
+                } else if reveal {
+                    GalaxyVisibility::Beacon
+                } else {
+                    GalaxyVisibility::Hidden
+                }
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_inside_a_galaxy_only_that_galaxy_is_visible() {
+        let view = ViewContext {
+            current: 1,
+            home: Some(1),
+            ..ViewContext::default()
+        };
+        assert!(!view.reveals_universe());
+        assert_eq!(
+            view.galaxy_visibility(3),
+            vec![
+                GalaxyVisibility::Hidden,
+                GalaxyVisibility::Populated,
+                GalaxyVisibility::Hidden
+            ]
+        );
+    }
+
+    #[test]
+    fn test_aiming_reveals_beacons_and_the_locked_halo() {
+        let view = ViewContext {
+            current: 0,
+            home: Some(0),
+            aiming: true,
+            aim: Some(2),
+            destination: None,
+        };
+        assert!(view.reveals_universe());
+        assert_eq!(
+            view.galaxy_visibility(3),
+            vec![
+                GalaxyVisibility::Populated,
+                GalaxyVisibility::Beacon,
+                GalaxyVisibility::Halo
+            ]
+        );
+    }
+
+    #[test]
+    fn test_flight_and_deep_space_reveal_the_universe() {
+        let flight = ViewContext {
+            current: 0,
+            home: None,
+            destination: Some(2),
+            ..ViewContext::default()
+        };
+        assert_eq!(
+            flight.galaxy_visibility(3),
+            vec![
+                GalaxyVisibility::Populated,
+                GalaxyVisibility::Beacon,
+                GalaxyVisibility::Populated
+            ]
+        );
+        let deep_space = ViewContext {
+            current: 0,
+            home: None,
+            ..ViewContext::default()
+        };
+        assert!(deep_space.reveals_universe());
+        assert_eq!(
+            deep_space.galaxy_visibility(2),
+            vec![GalaxyVisibility::Populated, GalaxyVisibility::Beacon]
+        );
+    }
 
     #[test]
     fn test_prime_galaxy_sits_at_the_core_of_the_universe() {

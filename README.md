@@ -69,6 +69,7 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - Windows are grouped into galaxies. Each galaxy has its own center and a wireframe halo, and its windows' $(\theta, \phi, r)$ are measured from that center.
 - Travel between galaxies with an eased flight that turns toward the destination and briefly widens the field of view, then faces the galaxy's first window on arrival.
 - Flying into another galaxy's halo by hand also makes it the current galaxy.
+- Inside a galaxy, only that galaxy is drawn. The universe boundary and other galaxies appear as faint outlines only while you aim a warp, during a flight, or in deep space.
 - Space warp: hold the left and right mouse buttons together and drag to turn toward another galaxy. When its halo sits at the center of the view, release either button to warp there. A short drag or `Esc` cancels, so pressing both buttons by accident never leaves the galaxy.
 - Start the chord while dragging a window to carry that window along. It keeps its trust domain and its placement, and stays focused on arrival.
 - Keyboard focus is cleared on arrival, so traveling never silently moves focus into another trust domain.

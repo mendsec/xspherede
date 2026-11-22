@@ -11,8 +11,8 @@ mod window3d;
 use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
 use galaxy::{
-    cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GALAXY_RADIUS,
-    PRIME_GALAXY, UNIVERSE_RADIUS,
+    cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GalaxyVisibility,
+    ViewContext, GALAXY_RADIUS, PRIME_GALAXY, UNIVERSE_RADIUS,
 };
 use minimap::MiniGlobeHud;
 use security::{
@@ -147,14 +147,18 @@ struct SpheradianRenderer {
 
     grid_pipeline: wgpu::RenderPipeline,
     grid_vertex_buffer: wgpu::Buffer,
-    grid_vertex_count: u32,
+    /// Vertex range of the universe boundary in `grid_vertex_buffer`.
+    universe_grid_range: Range<u32>,
     /// Vertex range of each galaxy's halo in `grid_vertex_buffer`, indexed by galaxy id.
     galaxy_grid_ranges: Vec<Range<u32>>,
+    /// Vertex range of each galaxy's sparse, faint beacon outline, indexed by galaxy id.
+    galaxy_beacon_ranges: Vec<Range<u32>>,
 
     matrix_pipeline: wgpu::RenderPipeline,
     matrix_vertex_buffer: wgpu::Buffer,
     matrix_index_buffer: wgpu::Buffer,
-    matrix_index_count: u32,
+    /// Index range of each galaxy's code rain in `matrix_index_buffer`, indexed by galaxy id.
+    galaxy_matrix_ranges: Vec<Range<u32>>,
 
     window_pipeline: wgpu::RenderPipeline,
     windows: Vec<WindowRenderEntry>,
@@ -167,6 +171,10 @@ struct SpheradianRenderer {
     travel_destination: Option<GalaxyId>,
     /// Window carried along by the current warp; it moves to the destination on arrival.
     travel_cargo: Option<usize>,
+    /// How much of each galaxy the main view draws, refreshed every frame.
+    galaxy_visibility: Vec<GalaxyVisibility>,
+    /// Whether the main view shows the universe boundary and other galaxies.
+    universe_revealed: bool,
     /// Armed state last shown in the space warp hint, to avoid retitling every frame.
     warp_hint_shown: Option<bool>,
 
@@ -614,11 +622,14 @@ impl SpheradianRenderer {
 
         // Sphere Grid and Matrix Code Volume Geometry
         let galaxies = demo_universe();
+        let galaxy_count = galaxies.len();
 
         // The universe boundary first, then one halo per galaxy (ranges kept for the Mini-Globe).
         let mut grid_vertices =
             generate_halo_grid(glam::Vec3::ZERO, UNIVERSE_RADIUS, 24, 14, None, 0.45);
+        let universe_grid_range = 0..grid_vertices.len() as u32;
         let mut galaxy_grid_ranges = Vec::with_capacity(galaxies.len());
+        let mut galaxy_beacon_ranges = Vec::with_capacity(galaxies.len());
         for galaxy in &galaxies {
             let start = grid_vertices.len() as u32;
             grid_vertices.extend(generate_halo_grid(
@@ -631,6 +642,18 @@ impl SpheradianRenderer {
             ));
             galaxy_grid_ranges.push(start..grid_vertices.len() as u32);
         }
+        for galaxy in &galaxies {
+            let start = grid_vertices.len() as u32;
+            grid_vertices.extend(generate_halo_grid(
+                galaxy.center,
+                GALAXY_RADIUS,
+                12,
+                6,
+                galaxy.halo_tint,
+                0.4,
+            ));
+            galaxy_beacon_ranges.push(start..grid_vertices.len() as u32);
+        }
         let grid_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Grid Vertex Buffer"),
             contents: bytemuck::cast_slice(&grid_vertices),
@@ -639,7 +662,9 @@ impl SpheradianRenderer {
 
         let mut matrix_vertices = Vec::new();
         let mut matrix_indices = Vec::new();
+        let mut galaxy_matrix_ranges = Vec::with_capacity(galaxies.len());
         for galaxy in &galaxies {
+            let start = matrix_indices.len() as u32;
             let (verts, idxs) = generate_matrix_code_volume(
                 GALAXY_RADIUS,
                 galaxy.center,
@@ -648,6 +673,7 @@ impl SpheradianRenderer {
             );
             matrix_vertices.extend(verts);
             matrix_indices.extend(idxs);
+            galaxy_matrix_ranges.push(start..matrix_indices.len() as u32);
         }
         let matrix_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Matrix Volume Vertex Buffer"),
@@ -903,18 +929,26 @@ impl SpheradianRenderer {
             minimap_bg_pipeline,
             grid_pipeline,
             grid_vertex_buffer,
-            grid_vertex_count: grid_vertices.len() as u32,
+            universe_grid_range,
             galaxy_grid_ranges,
+            galaxy_beacon_ranges,
             matrix_pipeline,
             matrix_vertex_buffer,
             matrix_index_buffer,
-            matrix_index_count: matrix_indices.len() as u32,
+            galaxy_matrix_ranges,
             window_pipeline,
             windows,
             galaxies,
             current_galaxy: PRIME_GALAXY,
             travel_destination: None,
             travel_cargo: None,
+            galaxy_visibility: ViewContext {
+                current: PRIME_GALAXY,
+                home: Some(PRIME_GALAXY),
+                ..ViewContext::default()
+            }
+            .galaxy_visibility(galaxy_count),
+            universe_revealed: false,
             warp_hint_shown: None,
             security_policy,
             clipboard_vault: SecureClipboardVault::new(),
@@ -1124,6 +1158,26 @@ impl SpheradianRenderer {
         self.window.set_title(&msg);
     }
 
+    /// Decides how much of each galaxy the main view draws this frame.
+    fn update_galaxy_visibility(&mut self) {
+        let view = ViewContext {
+            current: self.current_galaxy,
+            home: galaxy_at(&self.galaxies, self.camera.position),
+            aiming: self.interaction.warp.is_active(),
+            aim: self.interaction.warp.target(),
+            destination: self.travel_destination,
+        };
+        self.universe_revealed = view.reveals_universe();
+        self.galaxy_visibility = view.galaxy_visibility(self.galaxies.len());
+    }
+
+    /// Whether the windows and code rain of `galaxy` are drawn in the main view.
+    fn shows_galaxy_contents(&self, galaxy: GalaxyId) -> bool {
+        self.galaxy_visibility
+            .get(galaxy)
+            .is_some_and(|visibility| visibility.shows_contents())
+    }
+
     /// Makes `galaxy` the current one and points the Mini-Globe at it.
     fn set_current_galaxy(&mut self, galaxy: GalaxyId) {
         if let Some(center) = self.galaxies.get(galaxy).map(|g| g.center) {
@@ -1237,6 +1291,10 @@ impl SpheradianRenderer {
 
             let mut best_hit: Option<(usize, f32)> = None;
             for (idx, entry) in self.windows.iter().enumerate() {
+                // Windows that are not drawn cannot be hovered or clicked.
+                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                    continue;
+                }
                 if let Some(t) = entry.win.intersect_ray(ray_origin, ray_dir) {
                     if best_hit.is_none_or(|(_, best_t)| t < best_t) {
                         best_hit = Some((idx, t));
@@ -1362,6 +1420,7 @@ impl SpheradianRenderer {
         }
         self.minimap.update(dt);
         self.update_warp_aim();
+        self.update_galaxy_visibility();
         self.update_raycast_hover();
 
         let elapsed = (now - self.start_time).as_secs_f32();
@@ -1535,12 +1594,31 @@ impl SpheradianRenderer {
             rpass.set_pipeline(&self.grid_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.grid_vertex_buffer.slice(..));
-            rpass.draw(0..self.grid_vertex_count, 0..1);
+            // Inside a galaxy only its own halo is drawn; the rest of the universe
+            // appears while aiming a warp, while flying, or in deep space.
+            if self.universe_revealed {
+                rpass.draw(self.universe_grid_range.clone(), 0..1);
+            }
+            for (id, visibility) in self.galaxy_visibility.iter().enumerate() {
+                let range = match visibility {
+                    GalaxyVisibility::Hidden => None,
+                    GalaxyVisibility::Beacon => self.galaxy_beacon_ranges.get(id),
+                    GalaxyVisibility::Halo | GalaxyVisibility::Populated => {
+                        self.galaxy_grid_ranges.get(id)
+                    }
+                };
+                if let Some(range) = range {
+                    rpass.draw(range.clone(), 0..1);
+                }
+            }
 
             // 2. Draw curved 3D windows on the sphere
             rpass.set_pipeline(&self.window_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             for entry in &self.windows {
+                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                    continue;
+                }
                 rpass.set_bind_group(1, &entry.win.bind_group, &[]);
                 rpass.set_vertex_buffer(0, entry.win.vertex_buffer.slice(..));
                 rpass.set_index_buffer(entry.win.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1555,7 +1633,11 @@ impl SpheradianRenderer {
                 self.matrix_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            rpass.draw_indexed(0..self.matrix_index_count, 0, 0..1);
+            for (id, range) in self.galaxy_matrix_ranges.iter().enumerate() {
+                if self.shows_galaxy_contents(id) {
+                    rpass.draw_indexed(range.clone(), 0, 0..1);
+                }
+            }
 
             // ================================================================
             // 4. INTERACTIVE 3D MINI-GLOBE HUD (Bottom-Right / Overview)

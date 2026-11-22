@@ -65,6 +65,10 @@ impl WarpGesture {
         changed
     }
 
+    pub fn target(&self) -> Option<GalaxyId> {
+        self.target
+    }
+
     pub fn cargo(&self) -> Option<usize> {
         self.cargo
     }
