@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>XSphereDE</title>
+<meta name="description" content="A spherical 3D desktop environment prototype written in safe Rust, rendered with wgpu, designed around explicit trust domains.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #02060f;
+    --panel: #06101e;
+    --line: #15304f;
+    --text: #d6e4f5;
+    --muted: #7d97b4;
+    --accent: #8fb6ff;
+    --amber: #ffa53a;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif;
+    background: radial-gradient(ellipse 80% 50% at 50% 0%, #0b2142 0%, var(--bg) 70%) no-repeat, var(--bg); }
+  a { color: var(--accent); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+  header { padding: 56px 0 28px; }
+  .eyebrow { font: 600 12px var(--mono); letter-spacing: .4em; color: var(--accent); margin: 0 0 14px; }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.15; margin: 0 0 14px; font-weight: 600; }
+  .lead { color: var(--muted); font-size: 18px; max-width: 720px; margin: 0; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+  .btn { display: inline-block; padding: 9px 16px; border-radius: 8px; border: 1px solid #2c5a92; background: #0b2142;
+    color: #e3eeff; text-decoration: none; font: 500 13px var(--mono); }
+  .btn.ghost { background: transparent; border-color: var(--line); color: var(--text); }
+  .btn:hover { border-color: var(--accent); }
+  figure { margin: 8px 0 0; }
+  figure img { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--line); }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  h2 { font: 600 12px var(--mono); letter-spacing: .3em; color: var(--accent); margin: 56px 0 16px; text-transform: uppercase; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .demo { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 20px; align-items: center; }
+  .demo .tag { font: 600 10px var(--mono); letter-spacing: .15em; color: var(--amber); margin-bottom: 6px; }
+  .demo .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .note { margin-top: 14px; font-size: 14px; color: var(--muted); }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto;
+    font: 13px/1.6 var(--mono); color: var(--text); margin: 0; }
+  footer { margin: 64px 0 40px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px;
+    display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  @media (max-width: 620px) { .demo { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">XSPHEREDE</p>
+    <h1>A spherical 3D desktop, built around trust domains.</h1>
+    <p class="lead">XSphereDE places you at the center of a 360° sphere. Windows are curved surfaces at their own depth, and every window carries a compositor-drawn border that shows which trust domain it belongs to. Written in safe Rust and rendered with <code>wgpu</code>.</p>
+    <div class="cta">
+      <a class="btn" href="#demos">Browser demos</a>
+      <a class="btn ghost" href="https://github.com/mendsec/xspherede">Source on GitHub</a>
+    </div>
+  </header>
+
+  <main>
+  <figure>
+    <img src="screenshot.webp" alt="XSphereDE prototype: three curved windows with colored trust-domain borders inside the sphere, surrounded by volumetric code rain, with the Mini-Globe overview in the bottom-right corner" width="1920" height="1080">
+    <figcaption>The v0.0.1 prototype: demo windows in three trust domains, with the Mini-Globe overview in the corner.</figcaption>
+  </figure>
+
+  <h2 id="demos">Browser demos</h2>
+  <div class="card demo">
+    <div>
+      <div class="tag">CONCEPT PROTOTYPE · FILE MANAGER</div>
+      <h3>XSphereDE Files: Cube Explorer</h3>
+      <p>Your folders as a city, where height is size and density is file weight. Dive into a flat file view with a 3D sector map that draws your route between folders and any pending copy or cut action.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="https://mendsec.github.io/xspherede-files/">Open demo</a>
+      <a class="btn ghost" href="https://github.com/mendsec/xspherede-files">Repository</a>
+    </div>
+  </div>
+  <p class="note">The desktop itself is a native application and does not run in the browser yet. Demos here are interactive simulations of components and ideas.</p>
+
+  <h2>What exists today</h2>
+  <div class="grid">
+    <div class="card"><h3>Spherical workspace</h3><p>360° navigation and free flight inside a geodesic sphere, with curved windows placed at their own position and depth.</p></div>
+    <div class="card"><h3>Mini-Globe overview</h3><p>An outside view of the sphere showing every window at its true depth. Click anywhere on it to fly there.</p></div>
+    <div class="card"><h3>Trust domains</h3><p>Four domains with borders drawn by the compositor, which window content cannot alter, plus a compositor-owned clipboard vault and a lockdown mode.</p></div>
+    <div class="card"><h3>Hardened by default</h3><p><code>unsafe</code> forbidden, overflow checks in release builds, a pinned shader digest, and a small, auditable codebase.</p></div>
+  </div>
+
+  <h2>Run it</h2>
+  <pre>git clone https://github.com/mendsec/xspherede.git
+cd xspherede
+cargo run --release --locked</pre>
+  <p class="note">Early prototype: it runs as a regular window on your existing desktop and is not yet a security boundary. See the <a href="https://github.com/mendsec/xspherede#readme">README</a> for requirements, controls, and the roadmap.</p>
+  </main>
+
+  <footer>
+    <span>MIT licensed</span>
+    <a href="https://github.com/mendsec/xspherede">mendsec/xspherede</a>
+    <a href="https://github.com/mendsec/xspherede-files">mendsec/xspherede-files</a>
+  </footer>
+</div>
+</body>
+</html>
