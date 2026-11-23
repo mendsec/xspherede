@@ -14,7 +14,7 @@ Thank you for considering a contribution. Spheradian is an early prototype, so w
 You need Rust 1.88 or newer and a working GPU driver (Vulkan, or OpenGL / GLES).
 
 ```bash
-git clone https://github.com/mendsec/spheradian.git
+git clone https://github.com/spheradian/spheradian.git
 cd spheradian
 cargo run --locked
 ```
