@@ -67,7 +67,8 @@
     <h1>A spherical 3D desktop, built around trust domains.</h1>
     <p class="lead">Spheradian places you at the center of a 360° sphere. Windows are curved surfaces at their own depth, and every window carries a compositor-drawn border that shows which trust domain it belongs to. Written in safe Rust and rendered with <code>wgpu</code>.</p>
     <div class="cta">
-      <a class="btn" href="#demos">Browser demos</a>
+      <a class="btn" href="demo/">Try it in your browser</a>
+      <a class="btn ghost" href="#demos">Browser demos</a>
       <a class="btn ghost" href="https://github.com/spheradian/spheradian">Source on GitHub</a>
     </div>
   </header>
@@ -81,6 +82,16 @@
   <h2 id="demos">Browser demos</h2>
   <div class="card demo">
     <div>
+      <div class="tag">LIVE · THE PROTOTYPE ITSELF</div>
+      <h3>Spheradian v0.0.1 in your browser</h3>
+      <p>The desktop prototype compiled from the same Rust and <code>wgpu</code> code to WebAssembly. Fly through the sphere, drag windows, use the Mini-Globe, the clipboard vault, and lockdown mode. Runs on WebGPU or WebGL2 and needs a mouse and keyboard.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="demo/">Open demo</a>
+    </div>
+  </div>
+  <div class="card demo" style="margin-top: 14px">
+    <div>
       <div class="tag">CONCEPT PROTOTYPE · FILE MANAGER</div>
       <h3>Spheradian Files: Cube Explorer</h3>
       <p>Your folders as a city, where height is size and density is file weight. Dive into a flat file view with a 3D sector map that draws your route between folders and any pending copy or cut action.</p>
@@ -90,7 +101,7 @@
       <a class="btn ghost" href="https://github.com/spheradian/files">Repository</a>
     </div>
   </div>
-  <p class="note">The desktop itself is a native application and does not run in the browser yet. Demos here are interactive simulations of components and ideas.</p>
+  <p class="note">The browser build renders the built-in demo windows only. The desktop environment itself is a native application; the Files demo is a concept simulation of a future component.</p>
 
   <h2>What exists today</h2>
   <div class="grid">
