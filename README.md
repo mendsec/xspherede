@@ -50,7 +50,7 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - **Spatial workspaces without a headset.** A sphere gives you far more usable surface than a flat plane, with depth as a third axis for arranging work, on ordinary monitors and ordinary GPUs.
 - **Isolation you can see.** Borrowing from the Qubes OS model, a window's trust level is part of the desktop's visual language and is drawn by the compositor, never by the application.
 - **Hardened defaults, not hardened options.** The policy baseline follows the direction set by projects such as secureblue: no Xwayland, no automatic thumbnailers, no third-party code inside the compositor.
-- **A small, auditable codebase.** About 4,500 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
+- **A small, auditable codebase.** About 4,800 lines of Rust and WGSL, seven direct dependencies, `unsafe` forbidden at the crate level.
 
 ---
 
@@ -69,6 +69,9 @@ The path from here to a real compositor session is laid out in the [roadmap](#ro
 - Windows are grouped into galaxies. Each galaxy has its own center and a wireframe halo, and its windows' $(\theta, \phi, r)$ are measured from that center.
 - Travel between galaxies with an eased flight that turns toward the destination and briefly widens the field of view, then faces the galaxy's first window on arrival.
 - Flying into another galaxy's halo by hand also makes it the current galaxy.
+- Inside a galaxy, only that galaxy is drawn. The universe boundary and other galaxies appear as faint outlines only while you aim a warp, during a flight, or in deep space.
+- Space warp: hold the left and right mouse buttons together and drag to turn toward another galaxy. When its halo sits at the center of the view, release either button to warp there. A short drag or `Esc` cancels, so pressing both buttons by accident never leaves the galaxy.
+- Start the chord while dragging a window to carry that window along. It keeps its trust domain and its placement, and stays focused on arrival.
 - Keyboard focus is cleared on arrival, so traveling never silently moves focus into another trust domain.
 
 ### Mini-Globe overview
@@ -163,7 +166,7 @@ Spheradian type-checks for OpenBSD in CI but has not been run there yet, so thes
 
 | Action | Control |
 | :--- | :--- |
-| Rotate the view | Drag with the right mouse button, or the left button on the background |
+| Rotate the view | Drag with the right or middle mouse button, or the left button on the background |
 | Toggle continuous free-look | `Space` or `Tab` |
 | Fly through the sphere | Mouse wheel on empty space, or `W` `A` `S` `D` (`Q` / `E` for down / up, `Shift` to boost) |
 | Move a window across the sphere | Drag it with the left mouse button |
@@ -177,10 +180,12 @@ Spheradian type-checks for OpenBSD in CI but has not been run there yet, so thes
 | Run the host security audit | `F12` |
 | Travel to the previous or next galaxy | `Ctrl` + `PageUp` / `PageDown` |
 | Travel to galaxy 1 to 9 | `Ctrl` + `1` … `9` |
+| Space warp to the galaxy in view | Hold left + right buttons, drag until it locks, release |
+| Carry a window through a warp | Drag the window, then press the right button too |
 | Recenter in the current galaxy | `R` or `Home` |
 | Toggle code rain speed | `M` |
 | Toggle fullscreen | `F11` or `F` |
-| Collapse the Mini-Globe, or exit | `Esc` |
+| Cancel a warp, collapse the Mini-Globe, or exit | `Esc` |
 
 ---
 
@@ -195,6 +200,7 @@ spheradian/
     ├── main.rs         # wgpu / winit setup, event loop, render pipelines, lockdown mode
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting
     ├── galaxy.rs       # Galaxy: window clusters, universe and galaxy radii, demo universe
+    ├── warp.rs         # WarpGesture: left + right mouse chord and galaxy aiming
     ├── window3d.rs     # SphericalWindow: curved meshes, spherical raycasting, WindowSurfaceProvider
     ├── minimap.rs      # MiniGlobeHud: interactive, expandable overview globe
     ├── sphere_env.rs   # Geodesic grid and code rain volume generation
@@ -217,7 +223,7 @@ Done:
 - [x] Interactive Mini-Globe overview with true-depth window rendering
 - [x] Trust domains, clipboard vault, lockdown mode, and host audit
 - [x] Volumetric code rain with reading cone and per-window shield
-- [x] Galaxies of windows across a closed universe, with keyboard travel between them
+- [x] Galaxies of windows across a closed universe, with keyboard and space warp travel between them
 
 Next:
 

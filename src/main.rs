@@ -5,13 +5,14 @@ mod galaxy;
 mod minimap;
 mod security;
 mod sphere_env;
+mod warp;
 mod window3d;
 
 use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
 use galaxy::{
-    cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GALAXY_RADIUS,
-    PRIME_GALAXY, UNIVERSE_RADIUS,
+    cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GalaxyVisibility,
+    ViewContext, GALAXY_RADIUS, PRIME_GALAXY, UNIVERSE_RADIUS,
 };
 use minimap::MiniGlobeHud;
 use security::{
@@ -24,6 +25,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use warp::{aim_target, WarpGesture, WarpJump};
 use wgpu::util::DeviceExt;
 use window3d::{generate_demo_window_rgba, SphericalWindow, WindowVertex};
 use winit::application::ApplicationHandler;
@@ -61,6 +63,7 @@ struct InteractionState {
     last_cursor_pos: Option<(f32, f32)>,
     right_mouse_down: bool,
     left_mouse_down: bool,
+    middle_mouse_down: bool,
     free_look_mode: bool,
     shift_held: bool,
     ctrl_held: bool,
@@ -70,6 +73,8 @@ struct InteractionState {
     dragging_window: Option<usize>,
     minimap_dragging: bool,
     minimap_drag_distance: f32,
+    /// Left + right mouse chord for intergalactic travel.
+    warp: WarpGesture,
 }
 
 impl InteractionState {
@@ -79,6 +84,7 @@ impl InteractionState {
             last_cursor_pos: None,
             right_mouse_down: false,
             left_mouse_down: false,
+            middle_mouse_down: false,
             free_look_mode: false,
             shift_held: false,
             ctrl_held: false,
@@ -88,6 +94,7 @@ impl InteractionState {
             dragging_window: None,
             minimap_dragging: false,
             minimap_drag_distance: 0.0,
+            warp: WarpGesture::default(),
         }
     }
 
@@ -97,10 +104,12 @@ impl InteractionState {
         self.keys_pressed.clear();
         self.left_mouse_down = false;
         self.right_mouse_down = false;
+        self.middle_mouse_down = false;
         self.shift_held = false;
         self.ctrl_held = false;
         self.dragging_window = None;
         self.minimap_dragging = false;
+        self.warp.cancel();
     }
 }
 
@@ -138,14 +147,18 @@ struct SpheradianRenderer {
 
     grid_pipeline: wgpu::RenderPipeline,
     grid_vertex_buffer: wgpu::Buffer,
-    grid_vertex_count: u32,
+    /// Vertex range of the universe boundary in `grid_vertex_buffer`.
+    universe_grid_range: Range<u32>,
     /// Vertex range of each galaxy's halo in `grid_vertex_buffer`, indexed by galaxy id.
     galaxy_grid_ranges: Vec<Range<u32>>,
+    /// Vertex range of each galaxy's sparse, faint beacon outline, indexed by galaxy id.
+    galaxy_beacon_ranges: Vec<Range<u32>>,
 
     matrix_pipeline: wgpu::RenderPipeline,
     matrix_vertex_buffer: wgpu::Buffer,
     matrix_index_buffer: wgpu::Buffer,
-    matrix_index_count: u32,
+    /// Index range of each galaxy's code rain in `matrix_index_buffer`, indexed by galaxy id.
+    galaxy_matrix_ranges: Vec<Range<u32>>,
 
     window_pipeline: wgpu::RenderPipeline,
     windows: Vec<WindowRenderEntry>,
@@ -156,6 +169,14 @@ struct SpheradianRenderer {
     current_galaxy: GalaxyId,
     /// Destination of the intergalactic flight in progress, if any.
     travel_destination: Option<GalaxyId>,
+    /// Window carried along by the current warp; it moves to the destination on arrival.
+    travel_cargo: Option<usize>,
+    /// How much of each galaxy the main view draws, refreshed every frame.
+    galaxy_visibility: Vec<GalaxyVisibility>,
+    /// Whether the main view shows the universe boundary and other galaxies.
+    universe_revealed: bool,
+    /// Armed state last shown in the space warp hint, to avoid retitling every frame.
+    warp_hint_shown: Option<bool>,
 
     // Hardened Security Subsystem (secureblue + Qubes OS policies)
     security_policy: SecurityPolicy,
@@ -601,11 +622,14 @@ impl SpheradianRenderer {
 
         // Sphere Grid and Matrix Code Volume Geometry
         let galaxies = demo_universe();
+        let galaxy_count = galaxies.len();
 
         // The universe boundary first, then one halo per galaxy (ranges kept for the Mini-Globe).
         let mut grid_vertices =
             generate_halo_grid(glam::Vec3::ZERO, UNIVERSE_RADIUS, 24, 14, None, 0.45);
+        let universe_grid_range = 0..grid_vertices.len() as u32;
         let mut galaxy_grid_ranges = Vec::with_capacity(galaxies.len());
+        let mut galaxy_beacon_ranges = Vec::with_capacity(galaxies.len());
         for galaxy in &galaxies {
             let start = grid_vertices.len() as u32;
             grid_vertices.extend(generate_halo_grid(
@@ -618,6 +642,18 @@ impl SpheradianRenderer {
             ));
             galaxy_grid_ranges.push(start..grid_vertices.len() as u32);
         }
+        for galaxy in &galaxies {
+            let start = grid_vertices.len() as u32;
+            grid_vertices.extend(generate_halo_grid(
+                galaxy.center,
+                GALAXY_RADIUS,
+                12,
+                6,
+                galaxy.halo_tint,
+                0.4,
+            ));
+            galaxy_beacon_ranges.push(start..grid_vertices.len() as u32);
+        }
         let grid_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Grid Vertex Buffer"),
             contents: bytemuck::cast_slice(&grid_vertices),
@@ -626,7 +662,9 @@ impl SpheradianRenderer {
 
         let mut matrix_vertices = Vec::new();
         let mut matrix_indices = Vec::new();
+        let mut galaxy_matrix_ranges = Vec::with_capacity(galaxies.len());
         for galaxy in &galaxies {
+            let start = matrix_indices.len() as u32;
             let (verts, idxs) = generate_matrix_code_volume(
                 GALAXY_RADIUS,
                 galaxy.center,
@@ -635,6 +673,7 @@ impl SpheradianRenderer {
             );
             matrix_vertices.extend(verts);
             matrix_indices.extend(idxs);
+            galaxy_matrix_ranges.push(start..matrix_indices.len() as u32);
         }
         let matrix_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Matrix Volume Vertex Buffer"),
@@ -890,17 +929,27 @@ impl SpheradianRenderer {
             minimap_bg_pipeline,
             grid_pipeline,
             grid_vertex_buffer,
-            grid_vertex_count: grid_vertices.len() as u32,
+            universe_grid_range,
             galaxy_grid_ranges,
+            galaxy_beacon_ranges,
             matrix_pipeline,
             matrix_vertex_buffer,
             matrix_index_buffer,
-            matrix_index_count: matrix_indices.len() as u32,
+            galaxy_matrix_ranges,
             window_pipeline,
             windows,
             galaxies,
             current_galaxy: PRIME_GALAXY,
             travel_destination: None,
+            travel_cargo: None,
+            galaxy_visibility: ViewContext {
+                current: PRIME_GALAXY,
+                home: Some(PRIME_GALAXY),
+                ..ViewContext::default()
+            }
+            .galaxy_visibility(galaxy_count),
+            universe_revealed: false,
+            warp_hint_shown: None,
             security_policy,
             clipboard_vault: SecureClipboardVault::new(),
             lockdown_active: false,
@@ -922,6 +971,7 @@ impl SpheradianRenderer {
         self.galaxies = previous.galaxies;
         self.current_galaxy = previous.current_galaxy;
         self.travel_destination = previous.travel_destination;
+        self.travel_cargo = previous.travel_cargo;
 
         for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
             entry.win.galaxy = old.win.galaxy;
@@ -992,18 +1042,112 @@ impl SpheradianRenderer {
         self.window.set_title(&msg);
         self.interaction.dragging_window = None;
         self.travel_destination = Some(destination);
+        self.travel_cargo = None;
         self.camera.fly_to(center);
+    }
+
+    /// Performs a space warp requested by the left + right mouse chord.
+    fn warp(&mut self, jump: WarpJump) {
+        self.travel_to_galaxy(jump.destination);
+        if self.travel_destination == Some(jump.destination) {
+            self.travel_cargo = jump.cargo.filter(|&idx| idx < self.windows.len());
+        }
+    }
+
+    /// Starts the space warp chord when both left and right buttons are now held.
+    /// The chord never starts on the Mini-Globe, which has its own drag gestures.
+    /// A window being dragged when the chord starts is carried to the destination.
+    fn try_begin_warp_chord(&mut self, on_minimap: bool) -> bool {
+        let input = &mut self.interaction;
+        if !(input.left_mouse_down && input.right_mouse_down)
+            || on_minimap
+            || input.minimap_dragging
+            || input.warp.is_active()
+        {
+            return false;
+        }
+        let cargo = input.dragging_window.take();
+        input.warp.begin(cargo);
+        self.warp_hint_shown = None;
+        true
+    }
+
+    /// Abandons the chord without traveling.
+    fn cancel_warp_chord(&mut self) {
+        self.interaction.warp.cancel();
+        let msg = "Spheradian [SPACE WARP] — Cancelled";
+        log::info!("{}", msg);
+        self.window.set_title(msg);
+    }
+
+    /// Ends the chord gesture: warps when it was armed and aimed, otherwise cancels it.
+    fn release_warp_chord(&mut self) {
+        match self.interaction.warp.release() {
+            Some(jump) => self.warp(jump),
+            None => self.window.set_title(&self.idle_title()),
+        }
+    }
+
+    /// Re-aims the chord at the galaxy under the center of the view and shows the result.
+    fn update_warp_aim(&mut self) {
+        if !self.interaction.warp.is_active() {
+            return;
+        }
+        let target = aim_target(&self.galaxies, self.camera.position, self.camera.forward());
+        let armed = self.interaction.warp.is_armed();
+        let was_shown = self.warp_hint_shown;
+        let changed = self.interaction.warp.set_target(target);
+        if !changed && was_shown == Some(armed) {
+            return;
+        }
+        self.warp_hint_shown = Some(armed);
+        let cargo = self
+            .interaction
+            .warp
+            .cargo()
+            .and_then(|idx| self.windows.get(idx))
+            .map(|entry| format!(" carrying '{}'", entry.win.title))
+            .unwrap_or_default();
+        let msg = match (target, armed) {
+            (Some(galaxy), true) => format!(
+                "Spheradian [SPACE WARP] — Locked on galaxy {}{} | Release to warp, Esc to cancel",
+                self.galaxy_label(galaxy),
+                cargo
+            ),
+            (Some(galaxy), false) => format!(
+                "Spheradian [SPACE WARP] — Aiming at galaxy {}{} | Keep dragging to lock, Esc to cancel",
+                self.galaxy_label(galaxy),
+                cargo
+            ),
+            (None, _) => format!(
+                "Spheradian [SPACE WARP] — Drag to aim at a galaxy halo{} | Esc to cancel",
+                cargo
+            ),
+        };
+        self.window.set_title(&msg);
     }
 
     /// Completes a flight: the viewer now lives in `galaxy` and faces its first window.
     ///
     /// Focus is cleared on arrival rather than handed to a window of the new galaxy, so
     /// that traveling never silently moves keyboard or clipboard focus across trust domains.
-    fn arrive_at_galaxy(&mut self, galaxy: GalaxyId) {
+    fn arrive_at_galaxy(&mut self, galaxy: GalaxyId, cargo: Option<usize>) {
         self.set_current_galaxy(galaxy);
         self.interaction.focused_window = None;
-        if let Some(home_window) = self.windows.iter().find(|entry| entry.win.galaxy == galaxy) {
-            let target = home_window.win.world_center();
+        let center = self.current_galaxy_center();
+        // A carried window keeps its trust domain and its spherical placement; only its
+        // galaxy changes. It stays focused because the user explicitly brought it along.
+        if let Some(entry) = cargo.and_then(|idx| self.windows.get_mut(idx)) {
+            entry.win.galaxy = galaxy;
+            entry.win.origin = center;
+            entry.win.update_geometry(&self.queue);
+            self.interaction.focused_window = cargo;
+        }
+        let look_at = cargo
+            .and_then(|idx| self.windows.get(idx))
+            .or_else(|| self.windows.iter().find(|entry| entry.win.galaxy == galaxy))
+            .map(|entry| entry.win.world_center());
+        if let Some(target) = look_at {
             self.camera.look_at_point(target);
         }
         let msg = format!(
@@ -1012,6 +1156,26 @@ impl SpheradianRenderer {
         );
         log::info!("{}", msg);
         self.window.set_title(&msg);
+    }
+
+    /// Decides how much of each galaxy the main view draws this frame.
+    fn update_galaxy_visibility(&mut self) {
+        let view = ViewContext {
+            current: self.current_galaxy,
+            home: galaxy_at(&self.galaxies, self.camera.position),
+            aiming: self.interaction.warp.is_active(),
+            aim: self.interaction.warp.target(),
+            destination: self.travel_destination,
+        };
+        self.universe_revealed = view.reveals_universe();
+        self.galaxy_visibility = view.galaxy_visibility(self.galaxies.len());
+    }
+
+    /// Whether the windows and code rain of `galaxy` are drawn in the main view.
+    fn shows_galaxy_contents(&self, galaxy: GalaxyId) -> bool {
+        self.galaxy_visibility
+            .get(galaxy)
+            .is_some_and(|visibility| visibility.shows_contents())
     }
 
     /// Makes `galaxy` the current one and points the Mini-Globe at it.
@@ -1127,6 +1291,10 @@ impl SpheradianRenderer {
 
             let mut best_hit: Option<(usize, f32)> = None;
             for (idx, entry) in self.windows.iter().enumerate() {
+                // Windows that are not drawn cannot be hovered or clicked.
+                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                    continue;
+                }
                 if let Some(t) = entry.win.intersect_ray(ray_origin, ray_dir) {
                     if best_hit.is_none_or(|(_, best_t)| t < best_t) {
                         best_hit = Some((idx, t));
@@ -1136,7 +1304,9 @@ impl SpheradianRenderer {
 
             if self.interaction.hovered_window != best_hit.map(|(idx, _)| idx) {
                 self.interaction.hovered_window = best_hit.map(|(idx, _)| idx);
-                if let Some(idx) = self.interaction.hovered_window {
+                if self.interaction.warp.is_active() {
+                    // The space warp hint owns the title while the chord is held.
+                } else if let Some(idx) = self.interaction.hovered_window {
                     let win = &self.windows[idx].win;
                     let net_tag = if win.trust_domain.allows_network() {
                         "NET-SANDBOXED"
@@ -1232,10 +1402,12 @@ impl SpheradianRenderer {
         self.camera.update(dt);
         if !self.camera.is_flying() {
             if let Some(destination) = self.travel_destination.take() {
+                let cargo = self.travel_cargo.take();
                 let center = self.galaxies.get(destination).map(|g| g.center);
-                // A flight interrupted by manual movement does not count as an arrival.
+                // A flight interrupted by manual movement does not count as an arrival,
+                // and a carried window stays where it was.
                 if center.is_some_and(|c| c.distance(self.camera.position) < 0.5) {
-                    self.arrive_at_galaxy(destination);
+                    self.arrive_at_galaxy(destination, cargo);
                 }
             }
             // Flying by hand into another galaxy's halo makes it the current galaxy.
@@ -1247,6 +1419,8 @@ impl SpheradianRenderer {
             }
         }
         self.minimap.update(dt);
+        self.update_warp_aim();
+        self.update_galaxy_visibility();
         self.update_raycast_hover();
 
         let elapsed = (now - self.start_time).as_secs_f32();
@@ -1420,12 +1594,31 @@ impl SpheradianRenderer {
             rpass.set_pipeline(&self.grid_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.grid_vertex_buffer.slice(..));
-            rpass.draw(0..self.grid_vertex_count, 0..1);
+            // Inside a galaxy only its own halo is drawn; the rest of the universe
+            // appears while aiming a warp, while flying, or in deep space.
+            if self.universe_revealed {
+                rpass.draw(self.universe_grid_range.clone(), 0..1);
+            }
+            for (id, visibility) in self.galaxy_visibility.iter().enumerate() {
+                let range = match visibility {
+                    GalaxyVisibility::Hidden => None,
+                    GalaxyVisibility::Beacon => self.galaxy_beacon_ranges.get(id),
+                    GalaxyVisibility::Halo | GalaxyVisibility::Populated => {
+                        self.galaxy_grid_ranges.get(id)
+                    }
+                };
+                if let Some(range) = range {
+                    rpass.draw(range.clone(), 0..1);
+                }
+            }
 
             // 2. Draw curved 3D windows on the sphere
             rpass.set_pipeline(&self.window_pipeline);
             rpass.set_bind_group(0, &self.globals_bind_group, &[]);
             for entry in &self.windows {
+                if !self.shows_galaxy_contents(entry.win.galaxy) {
+                    continue;
+                }
                 rpass.set_bind_group(1, &entry.win.bind_group, &[]);
                 rpass.set_vertex_buffer(0, entry.win.vertex_buffer.slice(..));
                 rpass.set_index_buffer(entry.win.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1440,7 +1633,11 @@ impl SpheradianRenderer {
                 self.matrix_index_buffer.slice(..),
                 wgpu::IndexFormat::Uint32,
             );
-            rpass.draw_indexed(0..self.matrix_index_count, 0, 0..1);
+            for (id, range) in self.galaxy_matrix_ranges.iter().enumerate() {
+                if self.shows_galaxy_contents(id) {
+                    rpass.draw_indexed(range.clone(), 0, 0..1);
+                }
+            }
 
             // ================================================================
             // 4. INTERACTIVE 3D MINI-GLOBE HUD (Bottom-Right / Overview)
@@ -1608,6 +1805,11 @@ impl ApplicationHandler for SpheradianApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => renderer.resize(size),
+            // Button releases are not delivered while unfocused: a chord that loses focus
+            // is cancelled so it can never fire later by surprise.
+            WindowEvent::Focused(false) if renderer.interaction.warp.is_active() => {
+                renderer.cancel_warp_chord();
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 renderer.interaction.shift_held = mods.state().shift_key();
                 renderer.interaction.ctrl_held = mods.state().control_key();
@@ -1619,7 +1821,9 @@ impl ApplicationHandler for SpheradianApp {
                             renderer.interaction.keys_pressed.insert(code);
                             match code {
                                 KeyCode::Escape => {
-                                    if renderer.minimap.expanded {
+                                    if renderer.interaction.warp.is_active() {
+                                        renderer.cancel_warp_chord();
+                                    } else if renderer.minimap.expanded {
                                         renderer.minimap.expanded = false;
                                     } else {
                                         event_loop.exit();
@@ -1782,22 +1986,26 @@ impl ApplicationHandler for SpheradianApp {
                     renderer.config.height,
                 );
 
+                let pressed = state == ElementState::Pressed;
+
                 match button {
                     MouseButton::Middle => {
-                        if state == ElementState::Pressed && on_minimap {
+                        if pressed && on_minimap {
                             renderer.minimap.toggle_expanded();
                         } else {
-                            renderer.interaction.right_mouse_down = state == ElementState::Pressed;
+                            renderer.interaction.middle_mouse_down = pressed;
                         }
                     }
                     MouseButton::Right => {
-                        renderer.interaction.right_mouse_down = state == ElementState::Pressed;
-                        if state == ElementState::Pressed && on_minimap {
+                        renderer.interaction.right_mouse_down = pressed;
+                        if pressed && renderer.try_begin_warp_chord(on_minimap) {
+                            // Left was already held: the space warp chord has started.
+                        } else if pressed && on_minimap {
                             renderer.interaction.minimap_dragging = true;
                             renderer.interaction.minimap_drag_distance = 0.0;
-                        } else if state == ElementState::Released
-                            && renderer.interaction.minimap_dragging
-                        {
+                        } else if !pressed && renderer.interaction.warp.is_active() {
+                            renderer.release_warp_chord();
+                        } else if !pressed && renderer.interaction.minimap_dragging {
                             renderer.interaction.minimap_dragging = false;
                             // Quick right-click on the Mini-Globe expands/collapses the Globe on screen
                             if renderer.interaction.minimap_drag_distance < 6.0 && on_minimap {
@@ -1806,9 +2014,11 @@ impl ApplicationHandler for SpheradianApp {
                         }
                     }
                     MouseButton::Left => {
-                        renderer.interaction.left_mouse_down = state == ElementState::Pressed;
-                        if state == ElementState::Pressed {
-                            if on_minimap {
+                        renderer.interaction.left_mouse_down = pressed;
+                        if pressed {
+                            if renderer.try_begin_warp_chord(on_minimap) {
+                                // Right was already held: the space warp chord has started.
+                            } else if on_minimap {
                                 renderer.interaction.minimap_dragging = true;
                                 renderer.interaction.minimap_drag_distance = 0.0;
                                 renderer.interaction.dragging_window = None;
@@ -1819,8 +2029,10 @@ impl ApplicationHandler for SpheradianApp {
                                 renderer.interaction.dragging_window = None;
                             }
                         } else {
-                            // Released left mouse button: if it was a quick click on the Mini-Globe, rotate the view there
-                            if renderer.interaction.minimap_dragging {
+                            if renderer.interaction.warp.is_active() {
+                                renderer.release_warp_chord();
+                            } else if renderer.interaction.minimap_dragging {
+                                // Quick click on the Mini-Globe rotates the view there
                                 renderer.interaction.minimap_dragging = false;
                                 if renderer.interaction.minimap_drag_distance < 6.0 {
                                     renderer.jump_to_minimap_point(px, py);
@@ -1838,6 +2050,8 @@ impl ApplicationHandler for SpheradianApp {
                     let dx = new_pos.0 - last.0;
                     let dy = new_pos.1 - last.1;
 
+                    renderer.interaction.warp.add_drag(dx, dy);
+
                     if renderer.interaction.minimap_dragging {
                         let step_dist = (dx * dx + dy * dy).sqrt();
                         renderer.interaction.minimap_drag_distance += step_dist;
@@ -1851,6 +2065,7 @@ impl ApplicationHandler for SpheradianApp {
                             (entry.win.elevation - dy * 0.0032).clamp(-1.15, 1.15);
                         entry.win.update_geometry(&renderer.queue);
                     } else if renderer.interaction.right_mouse_down
+                        || renderer.interaction.middle_mouse_down
                         || renderer.interaction.free_look_mode
                         || renderer.interaction.left_mouse_down
                     {
@@ -1990,6 +2205,7 @@ mod tests {
             last_cursor_pos: Some((310.0, 235.0)),
             right_mouse_down: true,
             left_mouse_down: true,
+            middle_mouse_down: true,
             free_look_mode: true,
             shift_held: true,
             ctrl_held: true,
@@ -1999,7 +2215,10 @@ mod tests {
             dragging_window: Some(1),
             minimap_dragging: true,
             minimap_drag_distance: 42.0,
+            warp: WarpGesture::default(),
         };
+        state.warp.begin(Some(1));
+        state.warp.add_drag(100.0, 0.0);
 
         state.release_held();
 
@@ -2010,6 +2229,10 @@ mod tests {
         assert!(!state.ctrl_held);
         assert_eq!(state.dragging_window, None);
         assert!(!state.minimap_dragging);
+        assert!(!state.middle_mouse_down);
+        // A chord interrupted by a lost device must never fire later.
+        assert!(!state.warp.is_active());
+        assert_eq!(state.warp.release(), None);
 
         // Session toggles and non-held pointer/focus state should remain intact.
         assert!(state.free_look_mode);
