@@ -36,7 +36,7 @@ reviews:
         - Verify compositor-drawn trust-domain borders remain unforgeable by client window texture sampling and stay within valid WGSL bounds.
     - path: "Cargo.toml"
       instructions: |
-        - Flag any newly added dependency and verify it is justified in the PR description and compatible with the MIT license.
+        - Flag any newly added dependency and verify it is justified in the PR description and compatible with the Apache-2.0 license.
         - Ensure hardened profile flags (`overflow-checks = true`, `panic = "abort"`, `lto = "fat"`) and `[lints]` restrictions are preserved.
     - path: ".github/**"
       instructions: |

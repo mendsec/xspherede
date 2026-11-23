@@ -48,4 +48,24 @@ If you change `src/shader.wgsl`, the pinned digest in `src/security.rs` must be 
 
 ## Licensing
 
-By submitting a contribution you agree that it is licensed under the [MIT License](LICENSE), the same license as the project.
+Spheradian is licensed under the [Apache License, Version 2.0](LICENSE). Under section 5 of that license, any contribution you submit is licensed under the same terms, including its patent grant. You keep the copyright in your contribution; there is no Contributor License Agreement to sign.
+
+### Developer Certificate of Origin
+
+Every commit must be signed off to certify that you wrote the change or otherwise have the right to submit it under the project's license, as described in the [Developer Certificate of Origin 1.1](https://developercertificate.org/). Add the sign-off with `-s`:
+
+```sh
+git commit -s -m "fix: describe the change"
+```
+
+This appends a line with your name and email to the commit message:
+
+```text
+Signed-off-by: Your Name <you@example.com>
+```
+
+Use your real name; anonymous or pseudonymous sign-offs cannot be accepted. To sign off commits you have already made on a branch, run `git rebase --signoff main` and force-push the branch.
+
+### Name and trademark
+
+The license covers the code, not the project's name. See [TRADEMARKS.md](TRADEMARKS.md) for how the Spheradian name may be used, including by forks.
