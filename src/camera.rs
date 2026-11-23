@@ -1,6 +1,6 @@
 use glam::{Mat4, Vec3};
 
-/// 3D spatial camera for XSphereDE.
+/// 3D spatial camera for Spheradian.
 /// Allows both 360-degree spherical view rotation inside the sphere and
 /// free 3D spatial navigation (flying through the volumetric Matrix code corridors).
 pub struct SphereCamera {

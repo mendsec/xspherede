@@ -1,20 +1,22 @@
-# XSphereDE
+# Spheradian
 
 **A spherical 3D desktop environment prototype written in safe Rust, rendered with `wgpu`, designed around explicit trust domains.**
 
-[![CI](https://github.com/mendsec/xspherede/actions/workflows/ci.yml/badge.svg)](https://github.com/mendsec/xspherede/actions/workflows/ci.yml)
+[![CI](https://github.com/mendsec/spheradian/actions/workflows/ci.yml/badge.svg)](https://github.com/mendsec/spheradian/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rustc-1.88%2B-orange.svg)](Cargo.toml)
 [![unsafe: forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
 [![Status: prototype](https://img.shields.io/badge/status-prototype-yellow.svg)](#project-status)
 
-**Website and browser demos:** https://mendsec.github.io/xspherede/
+**Website and browser demos:** https://mendsec.github.io/spheradian/
 
-![XSphereDE prototype: three curved windows with colored trust-domain borders inside the sphere, surrounded by volumetric code rain, with the Mini-Globe overview in the bottom-right corner](docs/screenshot.webp)
+![Spheradian prototype: three curved windows with colored trust-domain borders inside the sphere, surrounded by volumetric code rain, with the Mini-Globe overview in the bottom-right corner](docs/screenshot.webp)
 
 *The v0.0.1 prototype: demo windows in three trust domains, with the Mini-Globe overview in the corner.*
 
-XSphereDE places you at the center of a 360° sphere. Windows are curved meshes that sit on the sphere at a position and depth $(\theta, \phi, r)$, and every window carries a compositor-drawn border that tells you which trust domain it belongs to. It revives the idea behind the classic SphereXP desktop and asks what it would look like if it were built today: memory-safe, GPU-native, Wayland-first, and with isolation as a visible, first-class concept instead of an afterthought.
+Spheradian places you at the center of a 360° sphere. Windows are curved meshes that sit on the sphere at a position and depth $(\theta, \phi, r)$, and every window carries a compositor-drawn border that tells you which trust domain it belongs to. It revives the idea behind the classic SphereXP desktop and asks what it would look like if it were built today: memory-safe, GPU-native, Wayland-first, and with isolation as a visible, first-class concept instead of an afterthought.
+
+> **About the name:** Spheradian was formerly called XSphereDE. The name joins *sphere*, after SphereXP, which inspired the project, with *radian*, after the steradian: the unit of solid angle, which measures how much of the sphere each window takes up. See [#17](https://github.com/mendsec/spheradian/issues/17) for the naming discussion.
 
 ---
 
@@ -87,7 +89,7 @@ These are the mechanisms implemented in [`src/security.rs`](src/security.rs) and
 | DragonFly BSD | Untested. Reports and patches welcome |
 | Windows, macOS | Should run through `wgpu` and `winit`; not a project focus |
 
-If you run XSphereDE on a BSD or an unusual GPU and driver combination, please open an issue with the result, whether it worked or not.
+If you run Spheradian on a BSD or an unusual GPU and driver combination, please open an issue with the result, whether it worked or not.
 
 ---
 
@@ -102,8 +104,8 @@ If you run XSphereDE on a BSD or an unusual GPU and driver combination, please o
 ### Run
 
 ```bash
-git clone https://github.com/mendsec/xspherede.git
-cd xspherede
+git clone https://github.com/mendsec/spheradian.git
+cd spheradian
 cargo run --release --locked
 ```
 
@@ -121,7 +123,7 @@ cargo test --locked
 
 ### OpenBSD
 
-XSphereDE type-checks for OpenBSD in CI but has not been run there yet, so these steps are a starting point rather than a verified recipe. Please [open a platform report](https://github.com/mendsec/xspherede/issues/new?template=platform_report.yml) with what you find.
+Spheradian type-checks for OpenBSD in CI but has not been run there yet, so these steps are a starting point rather than a verified recipe. Please [open a platform report](https://github.com/mendsec/spheradian/issues/new?template=platform_report.yml) with what you find.
 
 - `rustup` is not available on OpenBSD. Install the toolchain from packages and confirm that `rustc --version` reports 1.88 or newer:
 
@@ -166,7 +168,7 @@ XSphereDE type-checks for OpenBSD in CI but has not been run there yet, so these
 ## Architecture
 
 ```text
-xspherede/
+spheradian/
 ├── Cargo.toml          # Manifest and hardened build profiles
 ├── Cargo.lock          # Pinned dependency graph
 ├── docs/               # Screenshots and media
@@ -187,7 +189,7 @@ The key extension point is the `WindowSurfaceProvider` trait in [`src/window3d.r
 
 ## Roadmap
 
-Planned work is tracked on the **[XSphereDE Roadmap project board](https://github.com/users/mendsec/projects/6)**, grouped by phase, and in issues with the [`roadmap`](https://github.com/mendsec/xspherede/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) label. The list below is a summary; the board is the source of truth for status.
+Planned work is tracked on the **[Spheradian Roadmap project board](https://github.com/users/mendsec/projects/6)**, grouped by phase, and in issues with the [`roadmap`](https://github.com/mendsec/spheradian/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap) label. The list below is a summary; the board is the source of truth for status.
 
 Done:
 
@@ -199,19 +201,19 @@ Done:
 
 Next:
 
-- [ ] Live window capture through PipeWire, as the first real `WindowSurfaceProvider` ([#21](https://github.com/mendsec/xspherede/issues/21))
-- [ ] Native Wayland compositor session built on Smithay, with zero-copy DMA-BUF textures ([#22](https://github.com/mendsec/xspherede/issues/22))
-- [ ] Per-domain process isolation, so trust domains map to real sandboxes ([#24](https://github.com/mendsec/xspherede/issues/24))
-- [ ] Input routing to client surfaces through a trusted input path ([#23](https://github.com/mendsec/xspherede/issues/23))
-- [ ] Polar docks and launchers on the upper and lower rings ([#25](https://github.com/mendsec/xspherede/issues/25))
-- [ ] Spatial file manager, currently a concept prototype in [XSphereDE Files](https://github.com/mendsec/xspherede-files)
-- [ ] Verified BSD support ([#28](https://github.com/mendsec/xspherede/issues/28)) and distribution packaging ([#29](https://github.com/mendsec/xspherede/issues/29))
+- [ ] Live window capture through PipeWire, as the first real `WindowSurfaceProvider` ([#21](https://github.com/mendsec/spheradian/issues/21))
+- [ ] Native Wayland compositor session built on Smithay, with zero-copy DMA-BUF textures ([#22](https://github.com/mendsec/spheradian/issues/22))
+- [ ] Per-domain process isolation, so trust domains map to real sandboxes ([#24](https://github.com/mendsec/spheradian/issues/24))
+- [ ] Input routing to client surfaces through a trusted input path ([#23](https://github.com/mendsec/spheradian/issues/23))
+- [ ] Polar docks and launchers on the upper and lower rings ([#25](https://github.com/mendsec/spheradian/issues/25))
+- [ ] Spatial file manager, currently a concept prototype in [Spheradian Files](https://github.com/mendsec/spheradian-files)
+- [ ] Verified BSD support ([#28](https://github.com/mendsec/spheradian/issues/28)) and distribution packaging ([#29](https://github.com/mendsec/spheradian/issues/29))
 
 ---
 
 ## Ecosystem
 
-- **[XSphereDE Files](https://github.com/mendsec/xspherede-files)**: the file manager concept for XSphereDE. Folders appear as a city whose structures show size and density, and a 3D sector map draws your route between folders and any pending copy or cut action. [Try the live demo](https://mendsec.github.io/xspherede-files/) in your browser.
+- **[Spheradian Files](https://github.com/mendsec/spheradian-files)**: the file manager concept for Spheradian. Folders appear as a city whose structures show size and density, and a 3D sector map draws your route between folders and any pending copy or cut action. [Try the live demo](https://mendsec.github.io/spheradian-files/) in your browser.
 
 ---
 
@@ -220,7 +222,7 @@ Next:
 Contributions are welcome, and the project is small enough that a first patch can land in an afternoon. Good places to start:
 
 - **Test on your system.** BSD, non-Mesa drivers, multi-monitor, and HiDPI reports are all valuable.
-- **Pick a roadmap item** from the [project board](https://github.com/users/mendsec/projects/6). PipeWire capture and the Smithay session are the two that unlock everything else; [`good first issue`](https://github.com/mendsec/xspherede/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) items are smaller entry points.
+- **Pick a roadmap item** from the [project board](https://github.com/users/mendsec/projects/6). PipeWire capture and the Smithay session are the two that unlock everything else; [`good first issue`](https://github.com/mendsec/spheradian/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) items are smaller entry points.
 - **Review the security model.** Design feedback from people who work on compositors, sandboxing, or hardened distributions is especially wanted. Use private reporting for anything sensitive.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, and note the [Code of Conduct](CODE_OF_CONDUCT.md).
@@ -235,7 +237,7 @@ Please do not open public issues for security vulnerabilities. See [SECURITY.md]
 
 ## Acknowledgements
 
-XSphereDE is an independent project. It is inspired by, and not affiliated with or endorsed by, any of the following:
+Spheradian is an independent project. It is inspired by, and not affiliated with or endorsed by, any of the following:
 
 - **SphereXP**, the original spherical desktop, for the core idea.
 - **Qubes OS**, for trust domains and compositor-owned window decorations.

@@ -109,14 +109,14 @@ fn should_attempt_recovery(
     last_attempt.is_none_or(|last| now.duration_since(last) >= interval)
 }
 
-struct XSphereRenderer {
+struct SpheradianRenderer {
     window: Arc<Window>,
     instance: wgpu::Instance,
     /// `None` only between losing the surface and successfully recreating it.
     surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
     /// Set by wgpu when the device is lost. Every GPU resource in this renderer is
-    /// then invalid and the renderer must be rebuilt (see `XSphereApp::recover_from_device_loss`).
+    /// then invalid and the renderer must be rebuilt (see `SpheradianApp::recover_from_device_loss`).
     device_lost: Arc<AtomicBool>,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -162,13 +162,13 @@ struct XSphereRenderer {
     interaction: InteractionState,
 }
 
-impl XSphereRenderer {
+impl SpheradianRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
     const SPHERE_RADIUS: f32 = 26.0;
 
     fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("XSphereDE Depth Buffer"),
+            label: Some("Spheradian Depth Buffer"),
             size: wgpu::Extent3d {
                 width: width.max(1),
                 height: height.max(1),
@@ -214,14 +214,14 @@ impl XSphereRenderer {
 
         let adapter_info = adapter.get_info();
         log::info!(
-            "Selected GPU for XSphereDE: {:?} (backend: {:?})",
+            "Selected GPU for Spheradian: {:?} (backend: {:?})",
             adapter_info.name,
             adapter_info.backend
         );
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("XSphereDE Device"),
+                label: Some("Spheradian Device"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
@@ -278,7 +278,7 @@ impl XSphereRenderer {
         let security_policy = SecurityPolicy::maximum_hardened();
         assert!(
             security_policy.is_fully_enforced(),
-            "XSphereDE requires all mandatory security policies to be enabled"
+            "Spheradian requires all mandatory security policies to be enabled"
         );
 
         let shader_source = include_str!("shader.wgsl");
@@ -302,7 +302,7 @@ impl XSphereRenderer {
         }
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("XSphereDE Unified Shader"),
+            label: Some("Spheradian Unified Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
@@ -815,7 +815,7 @@ impl XSphereRenderer {
     /// camera, window placement, Mini-Globe, security state, and input state.
     ///
     /// GPU resources are not carried over; this renderer keeps the ones it created.
-    fn adopt_session_state(&mut self, previous: XSphereRenderer) {
+    fn adopt_session_state(&mut self, previous: SpheradianRenderer) {
         self.camera = previous.camera;
         self.minimap = previous.minimap;
 
@@ -925,7 +925,7 @@ impl XSphereRenderer {
             if let Some(idx) = hovered_win {
                 let win = &self.windows[idx].win;
                 self.window.set_title(&format!(
-                    "XSphereDE v{} [Mini-Globe] — [{}] {} (Depth R: {:.1}m — Scroll to adjust depth!)",
+                    "Spheradian v{} [Mini-Globe] — [{}] {} (Depth R: {:.1}m — Scroll to adjust depth!)",
                     env!("CARGO_PKG_VERSION"),
                     win.trust_domain.badge_label(),
                     win.title,
@@ -938,7 +938,7 @@ impl XSphereRenderer {
                 h,
             ) {
                 self.window.set_title(&format!(
-                    "XSphereDE v{} [Mini-Globe] — Left Click: Jump to ({:.0}°, {:.0}°) | Right Click or 'G': Expand/Collapse Globe",
+                    "Spheradian v{} [Mini-Globe] — Left Click: Jump to ({:.0}°, {:.0}°) | Right Click or 'G': Expand/Collapse Globe",
                     env!("CARGO_PKG_VERSION"),
                     az.to_degrees(),
                     el.to_degrees()
@@ -969,7 +969,7 @@ impl XSphereRenderer {
                         "AIR-GAPPED"
                     };
                     self.window.set_title(&format!(
-                        "XSphereDE v{} — [{} | {}] {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
+                        "Spheradian v{} — [{} | {}] {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
                         env!("CARGO_PKG_VERSION"),
                         win.trust_domain.badge_label(),
                         net_tag,
@@ -980,7 +980,7 @@ impl XSphereRenderer {
                     ));
                 } else {
                     self.window.set_title(concat!(
-                        "XSphereDE v",
+                        "Spheradian v",
                         env!("CARGO_PKG_VERSION"),
                         " [Hardened: secureblue + Qubes OS] — Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe"
                     ));
@@ -1178,12 +1178,12 @@ impl XSphereRenderer {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("XSphereDE Frame Encoder"),
+                label: Some("Spheradian Frame Encoder"),
             });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("XSphereDE Main Pass"),
+                label: Some("Spheradian Main Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,
@@ -1283,13 +1283,13 @@ impl XSphereRenderer {
 }
 
 #[derive(Default)]
-struct XSphereApp {
-    renderer: Option<XSphereRenderer>,
+struct SpheradianApp {
+    renderer: Option<SpheradianRenderer>,
     /// When the last rebuild after a device loss was attempted, to space out retries.
     last_recovery_attempt: Option<Instant>,
 }
 
-impl XSphereApp {
+impl SpheradianApp {
     const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
     /// If the GPU device was lost, rebuilds the renderer on a new device and carries
@@ -1319,7 +1319,7 @@ impl XSphereApp {
         // A window backs only one surface at a time: release the old one first.
         drop(renderer.surface.take());
 
-        match pollster::block_on(XSphereRenderer::new(renderer.window.clone())) {
+        match pollster::block_on(SpheradianRenderer::new(renderer.window.clone())) {
             Ok(mut rebuilt) => {
                 if let Some(previous) = self.renderer.take() {
                     rebuilt.adopt_session_state(previous);
@@ -1340,12 +1340,12 @@ impl XSphereApp {
     }
 }
 
-impl ApplicationHandler for XSphereApp {
+impl ApplicationHandler for SpheradianApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.renderer.is_none() {
             let win_attrs = Window::default_attributes()
                 .with_title(concat!(
-                    "XSphereDE v",
+                    "Spheradian v",
                     env!("CARGO_PKG_VERSION"),
                     " [Rust + wgpu] — Mini-Globe in bottom-right (Rotate / Click) | Scroll/WASD: Fly through Matrix Code"
                 ))
@@ -1354,11 +1354,11 @@ impl ApplicationHandler for XSphereApp {
             let window = Arc::new(
                 event_loop
                     .create_window(win_attrs)
-                    .expect("Failed to create XSphereDE window"),
+                    .expect("Failed to create Spheradian window"),
             );
 
-            let renderer =
-                pollster::block_on(XSphereRenderer::new(window)).unwrap_or_else(|e| panic!("{e}"));
+            let renderer = pollster::block_on(SpheradianRenderer::new(window))
+                .unwrap_or_else(|e| panic!("{e}"));
             self.renderer = Some(renderer);
         }
     }
@@ -1435,7 +1435,7 @@ impl ApplicationHandler for XSphereApp {
                                             format!("sealed-buffer-from-window-{}", win.id),
                                         );
                                         let msg = format!(
-                                            "XSphereDE [CLIPBOARD VAULT] — Copied & Sealed from [{}] ({}) | Focus target & press Ctrl+Shift+V",
+                                            "Spheradian [CLIPBOARD VAULT] — Copied & Sealed from [{}] ({}) | Focus target & press Ctrl+Shift+V",
                                             win.trust_domain.badge_label(),
                                             win.title
                                         );
@@ -1460,7 +1460,7 @@ impl ApplicationHandler for XSphereApp {
                                         {
                                             Ok((src_dom, src_title, _payload)) => {
                                                 let msg = format!(
-                                                    "XSphereDE [CLIPBOARD VAULT] — Transfer APPROVED: [{}] ({}) -> [{}] ({}) (Vault auto-wiped!)",
+                                                    "Spheradian [CLIPBOARD VAULT] — Transfer APPROVED: [{}] ({}) -> [{}] ({}) (Vault auto-wiped!)",
                                                     src_dom.badge_label(),
                                                     src_title,
                                                     dest_win.trust_domain.badge_label(),
@@ -1471,7 +1471,7 @@ impl ApplicationHandler for XSphereApp {
                                             }
                                             Err(violation) => {
                                                 let msg = format!(
-                                                    "XSphereDE [SECURITY ALERT] — {}",
+                                                    "Spheradian [SECURITY ALERT] — {}",
                                                     violation
                                                 );
                                                 log::warn!("{}", msg);
@@ -1486,11 +1486,11 @@ impl ApplicationHandler for XSphereApp {
                                     if renderer.lockdown_active {
                                         renderer.clipboard_vault.wipe();
                                         renderer.interaction.dragging_window = None;
-                                        let msg = "XSphereDE [LOCKDOWN ACTIVE] — All 3D window surfaces encrypted/blanked & Clipboard wiped (Press 'L' to unlock)";
+                                        let msg = "Spheradian [LOCKDOWN ACTIVE] — All 3D window surfaces encrypted/blanked & Clipboard wiped (Press 'L' to unlock)";
                                         log::warn!("{}", msg);
                                         renderer.window.set_title(msg);
                                     } else {
-                                        let msg = "XSphereDE [LOCKDOWN LIFTED] — Trusted 3D workspace restored";
+                                        let msg = "Spheradian [LOCKDOWN LIFTED] — Trusted 3D workspace restored";
                                         log::info!("{}", msg);
                                         renderer.window.set_title(msg);
                                     }
@@ -1504,7 +1504,7 @@ impl ApplicationHandler for XSphereApp {
                                     let summary = report.summary_line();
                                     log::info!("[SECURITY AUDIT] {}", summary);
                                     renderer.window.set_title(&format!(
-                                        "XSphereDE [SECURITY AUDIT] — {}",
+                                        "Spheradian [SECURITY AUDIT] — {}",
                                         summary
                                     ));
                                 }
@@ -1692,17 +1692,17 @@ impl ApplicationHandler for XSphereApp {
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!(
-        "Starting XSphereDE v{} — 3D Spherical Desktop Environment in Rust...",
+        "Starting Spheradian v{} — 3D Spherical Desktop Environment in Rust...",
         env!("CARGO_PKG_VERSION")
     );
 
     let event_loop = EventLoop::new().expect("Failed to create EventLoop");
     event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = XSphereApp::default();
+    let mut app = SpheradianApp::default();
     event_loop
         .run_app(&mut app)
-        .expect("Error while running XSphereDE");
+        .expect("Error while running Spheradian");
 }
 
 #[cfg(test)]
