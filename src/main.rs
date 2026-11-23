@@ -9,14 +9,18 @@ mod window3d;
 
 use bytemuck::{Pod, Zeroable};
 use camera::SphereCamera;
-use galaxy::{Galaxy, GalaxyId, PRIME_GALAXY};
+use galaxy::{
+    cycle_galaxy, demo_universe, galaxy_at, spherical_to_local, Galaxy, GalaxyId, GALAXY_RADIUS,
+    PRIME_GALAXY, UNIVERSE_RADIUS,
+};
 use minimap::MiniGlobeHud;
 use security::{
     validate_surface_buffer, verify_shader_source_integrity, SecureClipboardVault,
     SecurityAuditReport, SecurityPolicy, TrustDomain,
 };
-use sphere_env::{generate_matrix_code_volume, generate_sphere_grid, GridVertex, MatrixVertex};
+use sphere_env::{generate_halo_grid, generate_matrix_code_volume, GridVertex, MatrixVertex};
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -135,6 +139,8 @@ struct SpheradianRenderer {
     grid_pipeline: wgpu::RenderPipeline,
     grid_vertex_buffer: wgpu::Buffer,
     grid_vertex_count: u32,
+    /// Vertex range of each galaxy's halo in `grid_vertex_buffer`, indexed by galaxy id.
+    galaxy_grid_ranges: Vec<Range<u32>>,
 
     matrix_pipeline: wgpu::RenderPipeline,
     matrix_vertex_buffer: wgpu::Buffer,
@@ -148,6 +154,8 @@ struct SpheradianRenderer {
     galaxies: Vec<Galaxy>,
     /// Galaxy the viewer is currently in.
     current_galaxy: GalaxyId,
+    /// Destination of the intergalactic flight in progress, if any.
+    travel_destination: Option<GalaxyId>,
 
     // Hardened Security Subsystem (secureblue + Qubes OS policies)
     security_policy: SecurityPolicy,
@@ -164,7 +172,6 @@ struct SpheradianRenderer {
 
 impl SpheradianRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-    const SPHERE_RADIUS: f32 = 26.0;
 
     fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -271,8 +278,11 @@ impl SpheradianRenderer {
         surface.configure(&device, &config);
 
         let depth_view = Self::create_depth_view(&device, width, height);
-        let camera = SphereCamera::new(width, height);
-        let minimap = MiniGlobeHud::new(Self::SPHERE_RADIUS);
+        let mut camera = SphereCamera::new(width, height);
+        // The camera must see across the whole universe and never leave it.
+        camera.far = UNIVERSE_RADIUS * 2.5;
+        camera.bounds_radius = UNIVERSE_RADIUS - 4.0;
+        let minimap = MiniGlobeHud::new(GALAXY_RADIUS);
 
         // Enforce maximum hardened security policy (secureblue + Qubes OS)
         let security_policy = SecurityPolicy::maximum_hardened();
@@ -590,14 +600,42 @@ impl SpheradianRenderer {
         });
 
         // Sphere Grid and Matrix Code Volume Geometry
-        let grid_vertices = generate_sphere_grid(Self::SPHERE_RADIUS, 24, 14);
+        let galaxies = demo_universe();
+
+        // The universe boundary first, then one halo per galaxy (ranges kept for the Mini-Globe).
+        let mut grid_vertices =
+            generate_halo_grid(glam::Vec3::ZERO, UNIVERSE_RADIUS, 24, 14, None, 0.45);
+        let mut galaxy_grid_ranges = Vec::with_capacity(galaxies.len());
+        for galaxy in &galaxies {
+            let start = grid_vertices.len() as u32;
+            grid_vertices.extend(generate_halo_grid(
+                galaxy.center,
+                GALAXY_RADIUS,
+                24,
+                14,
+                galaxy.halo_tint,
+                1.0,
+            ));
+            galaxy_grid_ranges.push(start..grid_vertices.len() as u32);
+        }
         let grid_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Sphere Grid Vertex Buffer"),
             contents: bytemuck::cast_slice(&grid_vertices),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        let (matrix_vertices, matrix_indices) = generate_matrix_code_volume(Self::SPHERE_RADIUS);
+        let mut matrix_vertices = Vec::new();
+        let mut matrix_indices = Vec::new();
+        for galaxy in &galaxies {
+            let (verts, idxs) = generate_matrix_code_volume(
+                GALAXY_RADIUS,
+                galaxy.center,
+                galaxy.id as u32,
+                matrix_vertices.len() as u32,
+            );
+            matrix_vertices.extend(verts);
+            matrix_indices.extend(idxs);
+        }
         let matrix_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Matrix Volume Vertex Buffer"),
             contents: bytemuck::cast_slice(&matrix_vertices),
@@ -609,7 +647,7 @@ impl SpheradianRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        // Create 4 curved 3D windows distributed around the sphere
+        // Demo windows, grouped into the galaxies of the demo universe
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Window Texture Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -619,6 +657,7 @@ impl SpheradianRenderer {
 
         let demo_specs = [
             (
+                PRIME_GALAXY,
                 "Matrix Vault Terminal // run0",
                 TrustDomain::CoreVault,
                 -0.45_f32,
@@ -629,6 +668,7 @@ impl SpheradianRenderer {
                 0usize,
             ),
             (
+                PRIME_GALAXY,
                 "3D Security & Kernel Auditor",
                 TrustDomain::TrustedWork,
                 0.48_f32,
@@ -639,6 +679,7 @@ impl SpheradianRenderer {
                 1usize,
             ),
             (
+                PRIME_GALAXY,
                 "Spatial File Navigator (No-Thumbnails)",
                 TrustDomain::IsolatedApp,
                 -0.02_f32,
@@ -649,6 +690,7 @@ impl SpheradianRenderer {
                 2usize,
             ),
             (
+                PRIME_GALAXY,
                 "Disposable Quarantine Sandbox (Rear)",
                 TrustDomain::DisposableRed,
                 2.55_f32,
@@ -658,21 +700,77 @@ impl SpheradianRenderer {
                 0.38_f32,
                 3usize,
             ),
+            (
+                1,
+                "Andromeda Build Console",
+                TrustDomain::TrustedWork,
+                0.0_f32,
+                0.10_f32,
+                9.8_f32,
+                0.56_f32,
+                0.36_f32,
+                0usize,
+            ),
+            (
+                1,
+                "Andromeda Telemetry Scope",
+                TrustDomain::IsolatedApp,
+                0.62_f32,
+                -0.18_f32,
+                10.6_f32,
+                0.52_f32,
+                0.34_f32,
+                1usize,
+            ),
+            (
+                2,
+                "Triangulum Research Browser",
+                TrustDomain::UntrustedNet,
+                0.0_f32,
+                0.05_f32,
+                9.6_f32,
+                0.58_f32,
+                0.38_f32,
+                2usize,
+            ),
+            (
+                2,
+                "Triangulum Download Quarantine",
+                TrustDomain::DisposableRed,
+                -0.60_f32,
+                0.22_f32,
+                10.8_f32,
+                0.50_f32,
+                0.34_f32,
+                3usize,
+            ),
+            (
+                3,
+                "Sombrero Key Vault",
+                TrustDomain::CoreVault,
+                0.0_f32,
+                -0.06_f32,
+                9.2_f32,
+                0.54_f32,
+                0.36_f32,
+                0usize,
+            ),
         ];
 
-        let galaxies = vec![Galaxy::prime()];
-        let home_galaxy = &galaxies[PRIME_GALAXY];
         log::info!(
-            "Universe initialized with {} galaxy(ies); viewer starts in galaxy #{} '{}'",
+            "Universe initialized with {} galaxies; viewer starts in galaxy #{} '{}'",
             galaxies.len(),
-            home_galaxy.id,
-            home_galaxy.name
+            galaxies[PRIME_GALAXY].id,
+            galaxies[PRIME_GALAXY].name
         );
 
         let mut windows = Vec::new();
-        for (id, (title, trust_domain, azimuth, elevation, radius, ang_w, ang_h, variant)) in
-            demo_specs.into_iter().enumerate()
+        for (
+            id,
+            (galaxy_id, title, trust_domain, azimuth, elevation, radius, ang_w, ang_h, variant),
+        ) in demo_specs.into_iter().enumerate()
         {
+            let home_galaxy = &galaxies[galaxy_id];
             let tex_w = 512;
             let tex_h = 340;
             let rgba = generate_demo_window_rgba(tex_w, tex_h, variant, trust_domain);
@@ -793,6 +891,7 @@ impl SpheradianRenderer {
             grid_pipeline,
             grid_vertex_buffer,
             grid_vertex_count: grid_vertices.len() as u32,
+            galaxy_grid_ranges,
             matrix_pipeline,
             matrix_vertex_buffer,
             matrix_index_buffer,
@@ -801,6 +900,7 @@ impl SpheradianRenderer {
             windows,
             galaxies,
             current_galaxy: PRIME_GALAXY,
+            travel_destination: None,
             security_policy,
             clipboard_vault: SecureClipboardVault::new(),
             lockdown_active: false,
@@ -821,6 +921,7 @@ impl SpheradianRenderer {
 
         self.galaxies = previous.galaxies;
         self.current_galaxy = previous.current_galaxy;
+        self.travel_destination = previous.travel_destination;
 
         for (entry, old) in self.windows.iter_mut().zip(&previous.windows) {
             entry.win.galaxy = old.win.galaxy;
@@ -853,6 +954,74 @@ impl SpheradianRenderer {
             .map_or(glam::Vec3::ZERO, |galaxy| galaxy.center)
     }
 
+    /// Short "Name (i/n)" label of the current galaxy for the window title.
+    fn galaxy_label(&self, id: GalaxyId) -> String {
+        self.galaxies.get(id).map_or_else(
+            || "deep space".to_string(),
+            |galaxy| {
+                format!(
+                    "{} ({}/{})",
+                    galaxy.name,
+                    galaxy.id + 1,
+                    self.galaxies.len()
+                )
+            },
+        )
+    }
+
+    /// Title shown when nothing is hovered.
+    fn idle_title(&self) -> String {
+        format!(
+            "Spheradian v{} — Galaxy {} | Ctrl+PgUp/PgDn or Ctrl+1-9: Travel | Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe",
+            env!("CARGO_PKG_VERSION"),
+            self.galaxy_label(self.current_galaxy)
+        )
+    }
+
+    /// Starts an intergalactic flight to the center of `destination`.
+    fn travel_to_galaxy(&mut self, destination: GalaxyId) {
+        let Some(galaxy) = self.galaxies.get(destination) else {
+            return;
+        };
+        let center = galaxy.center;
+        let msg = format!(
+            "Spheradian — Traveling to galaxy {}…",
+            self.galaxy_label(destination)
+        );
+        log::info!("{}", msg);
+        self.window.set_title(&msg);
+        self.interaction.dragging_window = None;
+        self.travel_destination = Some(destination);
+        self.camera.fly_to(center);
+    }
+
+    /// Completes a flight: the viewer now lives in `galaxy` and faces its first window.
+    ///
+    /// Focus is cleared on arrival rather than handed to a window of the new galaxy, so
+    /// that traveling never silently moves keyboard or clipboard focus across trust domains.
+    fn arrive_at_galaxy(&mut self, galaxy: GalaxyId) {
+        self.set_current_galaxy(galaxy);
+        self.interaction.focused_window = None;
+        if let Some(home_window) = self.windows.iter().find(|entry| entry.win.galaxy == galaxy) {
+            let target = home_window.win.world_center();
+            self.camera.look_at_point(target);
+        }
+        let msg = format!(
+            "Spheradian — Arrived at galaxy {}",
+            self.galaxy_label(galaxy)
+        );
+        log::info!("{}", msg);
+        self.window.set_title(&msg);
+    }
+
+    /// Makes `galaxy` the current one and points the Mini-Globe at it.
+    fn set_current_galaxy(&mut self, galaxy: GalaxyId) {
+        if let Some(center) = self.galaxies.get(galaxy).map(|g| g.center) {
+            self.current_galaxy = galaxy;
+            self.minimap.target_focus = center;
+        }
+    }
+
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
@@ -873,6 +1042,10 @@ impl SpheradianRenderer {
                 .screen_ray(px, py, self.config.width, self.config.height)?;
         let mut best_hit: Option<(usize, f32)> = None;
         for (idx, entry) in self.windows.iter().enumerate() {
+            // The Mini-Globe shows only the current galaxy.
+            if entry.win.galaxy != self.current_galaxy {
+                continue;
+            }
             if let Some(t) = entry.win.intersect_ray(ray_origin, ray_dir) {
                 if best_hit.is_none_or(|(_, best_t)| t < best_t) {
                     best_hit = Some((idx, t));
@@ -886,8 +1059,8 @@ impl SpheradianRenderer {
     fn jump_to_minimap_point(&mut self, px: f32, py: f32) {
         if let Some(win_idx) = self.raycast_window_in_minimap(px, py) {
             self.interaction.focused_window = Some(win_idx);
-            let w = &self.windows[win_idx].win;
-            self.camera.look_at_spherical(w.azimuth, w.elevation);
+            let target = self.windows[win_idx].win.world_center();
+            self.camera.look_at_point(target);
             if self.minimap.expanded {
                 self.minimap.expanded = false;
             }
@@ -895,7 +1068,9 @@ impl SpheradianRenderer {
             self.minimap
                 .pick_spherical_point(px, py, self.config.width, self.config.height)
         {
-            self.camera.look_at_spherical(click_az, click_el);
+            let target = self.minimap.target_focus
+                + spherical_to_local(click_az, click_el, self.minimap.sphere_radius);
+            self.camera.look_at_point(target);
             if self.minimap.expanded {
                 self.minimap.expanded = false;
             }
@@ -969,21 +1144,18 @@ impl SpheradianRenderer {
                         "AIR-GAPPED"
                     };
                     self.window.set_title(&format!(
-                        "Spheradian v{} — [{} | {}] {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
+                        "Spheradian v{} — [{} | {}] {} in {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
                         env!("CARGO_PKG_VERSION"),
                         win.trust_domain.badge_label(),
                         net_tag,
                         win.title,
+                        self.galaxies.get(win.galaxy).map_or("deep space", |g| g.name.as_str()),
                         win.azimuth.to_degrees(),
                         win.elevation.to_degrees(),
                         win.radius
                     ));
                 } else {
-                    self.window.set_title(concat!(
-                        "Spheradian v",
-                        env!("CARGO_PKG_VERSION"),
-                        " [Hardened: secureblue + Qubes OS] — Ctrl+Shift+C/V: Clipboard Vault | 'L': Lockdown | 'G': Mini-Globe"
-                    ));
+                    self.window.set_title(&self.idle_title());
                 }
             }
         }
@@ -1058,6 +1230,22 @@ impl SpheradianRenderer {
         }
 
         self.camera.update(dt);
+        if !self.camera.is_flying() {
+            if let Some(destination) = self.travel_destination.take() {
+                let center = self.galaxies.get(destination).map(|g| g.center);
+                // A flight interrupted by manual movement does not count as an arrival.
+                if center.is_some_and(|c| c.distance(self.camera.position) < 0.5) {
+                    self.arrive_at_galaxy(destination);
+                }
+            }
+            // Flying by hand into another galaxy's halo makes it the current galaxy.
+            if let Some(galaxy) = galaxy_at(&self.galaxies, self.camera.position) {
+                if galaxy != self.current_galaxy {
+                    self.set_current_galaxy(galaxy);
+                    self.window.set_title(&self.idle_title());
+                }
+            }
+        }
         self.minimap.update(dt);
         self.update_raycast_hover();
 
@@ -1073,10 +1261,23 @@ impl SpheradianRenderer {
             .unwrap_or(11.8)
             .max(11.5);
 
+        // The shader shields up to four windows from the code rain: use the closest ones.
+        let mut nearest: Vec<(f32, glam::Vec3, f32)> = self
+            .windows
+            .iter()
+            .map(|entry| {
+                let center = entry.win.world_center();
+                (
+                    center.distance_squared(self.camera.position),
+                    center,
+                    entry.win.shield_cos(),
+                )
+            })
+            .collect();
+        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut window_shields = [[0.0_f32, 0.0, -10.0, 1.0]; 4];
-        for (i, entry) in self.windows.iter().take(4).enumerate() {
-            let center = entry.win.world_center();
-            window_shields[i] = [center.x, center.y, center.z, entry.win.shield_cos()];
+        for (slot, (_, center, shield_cos)) in window_shields.iter_mut().zip(nearest) {
+            *slot = [center.x, center.y, center.z, shield_cos];
         }
 
         let globals_uniform = GlobalsUniform {
@@ -1259,12 +1460,18 @@ impl SpheradianRenderer {
                 rpass.set_pipeline(&self.grid_pipeline);
                 rpass.set_bind_group(0, &self.minimap_globals_bind_group, &[]);
                 rpass.set_vertex_buffer(0, self.grid_vertex_buffer.slice(..));
-                rpass.draw(0..self.grid_vertex_count, 0..1);
+                if let Some(range) = self.galaxy_grid_ranges.get(self.current_galaxy) {
+                    rpass.draw(range.clone(), 0..1);
+                }
 
                 // 4c. 3D windows rendered at their true radial depths inside the Mini-Globe!
                 rpass.set_pipeline(&self.window_pipeline);
                 rpass.set_bind_group(0, &self.minimap_globals_bind_group, &[]);
-                for entry in &self.windows {
+                for entry in self
+                    .windows
+                    .iter()
+                    .filter(|entry| entry.win.galaxy == self.current_galaxy)
+                {
                     rpass.set_bind_group(1, &entry.win.bind_group, &[]);
                     rpass.set_vertex_buffer(0, entry.win.vertex_buffer.slice(..));
                     rpass.set_index_buffer(
@@ -1511,6 +1718,26 @@ impl ApplicationHandler for SpheradianApp {
                                 KeyCode::KeyG => {
                                     renderer.minimap.toggle_expanded();
                                 }
+                                // Intergalactic travel: Ctrl + PageUp / PageDown cycles galaxies
+                                KeyCode::PageUp | KeyCode::PageDown
+                                    if renderer.interaction.ctrl_held =>
+                                {
+                                    let step = if code == KeyCode::PageDown { 1 } else { -1 };
+                                    let destination = cycle_galaxy(
+                                        renderer.current_galaxy,
+                                        renderer.galaxies.len(),
+                                        step,
+                                    );
+                                    renderer.travel_to_galaxy(destination);
+                                }
+                                // Intergalactic travel: Ctrl + 1..9 jumps to a galaxy directly
+                                _ if renderer.interaction.ctrl_held
+                                    && galaxy_hotkey_index(code).is_some() =>
+                                {
+                                    if let Some(destination) = galaxy_hotkey_index(code) {
+                                        renderer.travel_to_galaxy(destination);
+                                    }
+                                }
                                 KeyCode::Space | KeyCode::Tab => {
                                     renderer.interaction.free_look_mode =
                                         !renderer.interaction.free_look_mode;
@@ -1689,6 +1916,23 @@ impl ApplicationHandler for SpheradianApp {
     }
 }
 
+/// Maps `1`..`9` (top row or keypad) to galaxy ids `0`..`8`.
+fn galaxy_hotkey_index(code: KeyCode) -> Option<GalaxyId> {
+    let index = match code {
+        KeyCode::Digit1 | KeyCode::Numpad1 => 0,
+        KeyCode::Digit2 | KeyCode::Numpad2 => 1,
+        KeyCode::Digit3 | KeyCode::Numpad3 => 2,
+        KeyCode::Digit4 | KeyCode::Numpad4 => 3,
+        KeyCode::Digit5 | KeyCode::Numpad5 => 4,
+        KeyCode::Digit6 | KeyCode::Numpad6 => 5,
+        KeyCode::Digit7 | KeyCode::Numpad7 => 6,
+        KeyCode::Digit8 | KeyCode::Numpad8 => 7,
+        KeyCode::Digit9 | KeyCode::Numpad9 => 8,
+        _ => return None,
+    };
+    Some(index)
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!(
@@ -1708,6 +1952,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_galaxy_hotkeys_map_digits_to_galaxy_ids() {
+        assert_eq!(galaxy_hotkey_index(KeyCode::Digit1), Some(0));
+        assert_eq!(galaxy_hotkey_index(KeyCode::Numpad4), Some(3));
+        assert_eq!(galaxy_hotkey_index(KeyCode::Digit9), Some(8));
+        assert_eq!(galaxy_hotkey_index(KeyCode::Digit0), None);
+        assert_eq!(galaxy_hotkey_index(KeyCode::KeyG), None);
+    }
 
     #[test]
     fn test_should_attempt_recovery_respects_retry_interval() {

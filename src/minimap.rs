@@ -14,6 +14,9 @@ pub struct MiniGlobeHud {
     /// Distance from the external camera to the center of the mini-globe
     pub camera_distance: f32,
     pub sphere_radius: f32,
+    /// Center of the galaxy shown in the Mini-Globe (universe coordinates)
+    pub focus: Vec3,
+    pub target_focus: Vec3,
     /// Indicates whether the mouse cursor is currently hovering over the Mini-Globe
     pub is_hovered: bool,
     /// Indicates whether the Mini-Globe is expanded at the center of the screen (SphereXP Overview mode)
@@ -33,6 +36,8 @@ impl MiniGlobeHud {
             target_orb_pitch: 0.30,
             camera_distance: sphere_radius * 2.42,
             sphere_radius,
+            focus: Vec3::ZERO,
+            target_focus: Vec3::ZERO,
             is_hovered: false,
             expanded: false,
             expansion_anim: 0.0,
@@ -91,6 +96,7 @@ impl MiniGlobeHud {
         let smooth = (14.0 * dt).clamp(0.0, 1.0);
         self.orb_yaw += (self.target_orb_yaw - self.orb_yaw) * smooth;
         self.orb_pitch += (self.target_orb_pitch - self.orb_pitch) * smooth;
+        self.focus = self.focus.lerp(self.target_focus, smooth);
 
         let target_exp = if self.expanded { 1.0 } else { 0.0 };
         self.expansion_anim += (target_exp - self.expansion_anim) * (10.0 * dt).clamp(0.0, 1.0);
@@ -107,16 +113,17 @@ impl MiniGlobeHud {
     pub fn eye_position(&self) -> Vec3 {
         let (sin_y, cos_y) = self.orb_yaw.sin_cos();
         let (sin_p, cos_p) = self.orb_pitch.sin_cos();
-        Vec3::new(
-            self.camera_distance * cos_p * sin_y,
-            self.camera_distance * sin_p,
-            self.camera_distance * cos_p * cos_y,
-        )
+        self.focus
+            + Vec3::new(
+                self.camera_distance * cos_p * sin_y,
+                self.camera_distance * sin_p,
+                self.camera_distance * cos_p * cos_y,
+            )
     }
 
     pub fn view_proj_matrix(&self) -> Mat4 {
         let eye = self.eye_position();
-        let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+        let view = glam::camera::rh::view::look_at_mat4(eye, self.focus, Vec3::Y);
         let proj =
             glam::camera::rh::proj::directx::perspective(48.0_f32.to_radians(), 1.0, 1.0, 200.0);
         proj * view
@@ -146,7 +153,7 @@ impl MiniGlobeHud {
     }
 
     /// Raycasts from the cursor `(px, py)` onto the 3D Mini-Globe shell and returns `(azimuth, elevation)`
-    /// of the clicked/hovered point on the sphere surface.
+    /// of the clicked/hovered point on the sphere surface, measured from the shown galaxy's center.
     pub fn pick_spherical_point(
         &self,
         px: f32,
@@ -155,6 +162,7 @@ impl MiniGlobeHud {
         win_height: u32,
     ) -> Option<(f32, f32)> {
         let (ray_origin, ray_dir) = self.screen_ray(px, py, win_width, win_height)?;
+        let ray_origin = ray_origin - self.focus;
 
         let r = self.sphere_radius;
         let b = ray_origin.dot(ray_dir);
