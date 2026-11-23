@@ -16,7 +16,7 @@ unsound = "workspace"
 ignore = []
 
 [licenses]
-# Permissive SPDX licenses compatible with this project's MIT license.
+# Permissive SPDX licenses compatible with this project's Apache-2.0 license.
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",

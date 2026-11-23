@@ -3,7 +3,7 @@
 **A spherical 3D desktop environment prototype written in safe Rust, rendered with `wgpu`, designed around explicit trust domains.**
 
 [![CI](https://github.com/spheradian/spheradian/actions/workflows/ci.yml/badge.svg)](https://github.com/spheradian/spheradian/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rustc-1.88%2B-orange.svg)](Cargo.toml)
 [![unsafe: forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg)](Cargo.toml)
 [![Status: prototype](https://img.shields.io/badge/status-prototype-yellow.svg)](#project-status)
@@ -248,4 +248,6 @@ Spheradian is an independent project. It is inspired by, and not affiliated with
 
 ## License
 
-Distributed under the MIT License. See [LICENSE](LICENSE).
+Distributed under the Apache License, Version 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+The license does not grant rights to the Spheradian name. See [TRADEMARKS.md](TRADEMARKS.md) for how the name may be used.

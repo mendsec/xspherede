@@ -16,6 +16,9 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Changed
 
+- The project is renamed from XSphereDE to Spheradian and now lives in the [spheradian](https://github.com/spheradian) GitHub organization.
+- The license changes from MIT to Apache-2.0, which adds an explicit patent grant and states that the license does not cover the project's name. A `NOTICE` file and a trademark policy (`TRADEMARKS.md`) are added.
+- Contributions now require a Developer Certificate of Origin sign-off (`git commit -s`).
 - README rewritten with an explicit project status, platform support table, and roadmap.
 - Minimum supported Rust version declared as 1.88.
 - The host audit reports Linux-specific kernel settings as `n/a` on systems that do not expose them, instead of `0`.
