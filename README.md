@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/spheradian-logo-transparent.svg">
+    <img src="docs/brand/spheradian-logo-light.svg" alt="Spheradian logo: a wireframe sphere with a curved window whose solid angle is drawn back to the viewer at its center" width="160">
+  </picture>
+</p>
+
 # Spheradian
 
 **A spherical 3D desktop environment prototype written in safe Rust, rendered with `wgpu`, designed around explicit trust domains.**

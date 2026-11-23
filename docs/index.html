@@ -5,7 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Spheradian</title>
 <meta name="description" content="A spherical 3D desktop environment prototype written in safe Rust, rendered with wgpu, designed around explicit trust domains.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="icon" href="brand/spheradian-logo-small.svg" type="image/svg+xml">
+<link rel="icon" href="brand/spheradian-logo-small-256.png" type="image/png" sizes="256x256">
+<link rel="apple-touch-icon" href="brand/spheradian-logo-512.png">
+<link rel="preconnect"href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -25,7 +28,9 @@
   a { color: var(--accent); }
   .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
   header { padding: 56px 0 28px; }
-  .eyebrow { font: 600 12px var(--mono); letter-spacing: .4em; color: var(--accent); margin: 0 0 14px; }
+  .brand { display: flex; align-items: center; gap: 14px; margin: 0 0 18px; }
+  .brand img { width: 64px; height: 64px; display: block; }
+  .eyebrow { font: 600 12px var(--mono); letter-spacing: .4em; color: var(--accent); margin: 0; }
   h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.15; margin: 0 0 14px; font-weight: 600; }
   .lead { color: var(--muted); font-size: 18px; max-width: 720px; margin: 0; }
   .cta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
@@ -55,7 +60,10 @@
 <body>
 <div class="wrap">
   <header>
-    <p class="eyebrow">SPHERADIAN</p>
+    <div class="brand">
+      <img src="brand/spheradian-logo-transparent.svg" alt="" width="64" height="64">
+      <p class="eyebrow">SPHERADIAN</p>
+    </div>
     <h1>A spherical 3D desktop, built around trust domains.</h1>
     <p class="lead">Spheradian places you at the center of a 360° sphere. Windows are curved surfaces at their own depth, and every window carries a compositor-drawn border that shows which trust domain it belongs to. Written in safe Rust and rendered with <code>wgpu</code>.</p>
     <div class="cta">
