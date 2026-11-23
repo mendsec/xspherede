@@ -177,7 +177,7 @@ struct WindowUniform {
     // [window_id, is_hovered, is_focused, opacity]
     state: vec4<f32>,
     // [trust_r, trust_g, trust_b, lockdown_active]
-    // Controlled exclusively by the trusted XSphereDE compositor; untrusted client textures cannot alter it.
+    // Controlled exclusively by the trusted Spheradian compositor; untrusted client textures cannot alter it.
     trust_color: vec4<f32>,
 };
 

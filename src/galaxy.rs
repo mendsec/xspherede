@@ -1,12 +1,12 @@
 use glam::Vec3;
 
-/// Identifier of a galaxy inside the XSphereDE universe.
+/// Identifier of a galaxy inside the Spheradian universe.
 pub type GalaxyId = usize;
 
 /// The galaxy every session starts in, centered at the core of the universe.
 pub const PRIME_GALAXY: GalaxyId = 0;
 
-/// A cluster of windows inside the XSphereDE universe.
+/// A cluster of windows inside the Spheradian universe.
 ///
 /// The large sphere that surrounds the viewer is the shape of the universe: finite,
 /// closed, and without an edge. Windows do not float freely in it; they are grouped

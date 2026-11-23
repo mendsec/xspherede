@@ -1,6 +1,6 @@
-# Contributing to XSphereDE
+# Contributing to Spheradian
 
-Thank you for considering a contribution. XSphereDE is an early prototype, so well-scoped patches, test reports, and design feedback all move it forward.
+Thank you for considering a contribution. Spheradian is an early prototype, so well-scoped patches, test reports, and design feedback all move it forward.
 
 ## Ways to contribute
 
@@ -14,8 +14,8 @@ Thank you for considering a contribution. XSphereDE is an early prototype, so we
 You need Rust 1.88 or newer and a working GPU driver (Vulkan, or OpenGL / GLES).
 
 ```bash
-git clone https://github.com/mendsec/xspherede.git
-cd xspherede
+git clone https://github.com/mendsec/spheradian.git
+cd spheradian
 cargo run --locked
 ```
 

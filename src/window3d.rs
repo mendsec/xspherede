@@ -22,7 +22,7 @@ pub trait WindowSurfaceProvider {
     fn render_rgba(&self, time_secs: f32) -> Vec<u8>;
 }
 
-/// Window positioned on the 3D spherical surface of XSphereDE.
+/// Window positioned on the 3D spherical surface of Spheradian.
 pub struct SphericalWindow {
     pub id: usize,
     pub title: String,
@@ -223,7 +223,7 @@ pub fn wrap_angle_diff(a: f32, b: f32) -> f32 {
     diff
 }
 
-/// Generates a stylized RGBA texture representing XSphereDE desktop windows in the prototype,
+/// Generates a stylized RGBA texture representing Spheradian desktop windows in the prototype,
 /// respecting `secureblue` (no external thumbnailers) and `Qubes OS` (`TrustDomain` header styling).
 pub fn generate_demo_window_rgba(
     width: u32,

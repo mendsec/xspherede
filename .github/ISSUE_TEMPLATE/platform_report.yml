@@ -1,5 +1,5 @@
 name: Platform report
-description: Tell us whether XSphereDE builds and runs on your system. Both successes and failures help.
+description: Tell us whether Spheradian builds and runs on your system. Both successes and failures help.
 labels: [platform]
 body:
   - type: dropdown

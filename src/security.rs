@@ -1,4 +1,4 @@
-//! Security and Hardening Engine for **XSphereDE**.
+//! Security and Hardening Engine for **Spheradian**.
 //!
 //! Enforces strict Desktop Environment (DE) and 3D Compositor security policies directly
 //! modeled after the defense-in-depth architectures of:
@@ -33,7 +33,7 @@ pub const MAX_SURFACE_BUFFER_BYTES: usize = (MAX_WINDOW_TEXTURE_DIM as usize)
 /// Any tampering with the shader source (e.g., attempting to bypass unforgeable domain borders)
 /// immediately aborts compositor initialization before uploading code to the GPU.
 pub const EXPECTED_SHADER_SHA256: &str =
-    "0dbf47c26f90c678aec5b50e273bd12eda2e3334f148af48b29fc1a8d7e1516d";
+    "3071e603cd8acb171180d72f6f202f0a6655d09f62d7eb3e384cd866d2389242";
 
 /// Cryptographically verifies the SHA-256 integrity of the WGSL shader source before GPU compilation.
 pub fn verify_shader_source_integrity(shader_source: &str) -> Result<String, SecurityViolation> {
@@ -151,7 +151,7 @@ pub struct SecurityPolicy {
 }
 
 impl SecurityPolicy {
-    /// Returns the immutable maximum hardened security profile for XSphereDE.
+    /// Returns the immutable maximum hardened security profile for Spheradian.
     pub const fn maximum_hardened() -> Self {
         Self {
             disable_xwayland: true,
@@ -188,7 +188,7 @@ impl Default for SecurityPolicy {
     }
 }
 
-/// Security violations detected and blocked by the XSphereDE compositor.
+/// Security violations detected and blocked by the Spheradian compositor.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SecurityViolation {
@@ -211,7 +211,7 @@ pub enum SecurityViolation {
         expected_hex: &'static str,
         actual_hex: String,
     },
-    /// Operation rejected because XSphereDE is currently in Lockdown mode (`Key L`).
+    /// Operation rejected because Spheradian is currently in Lockdown mode (`Key L`).
     SystemLockedDown,
 }
 
@@ -254,7 +254,7 @@ impl fmt::Display for SecurityViolation {
             Self::SystemLockedDown => {
                 write!(
                     f,
-                    "Operation blocked: XSphereDE is in LOCKDOWN mode (press 'L' to unlock)"
+                    "Operation blocked: Spheradian is in LOCKDOWN mode (press 'L' to unlock)"
                 )
             }
         }

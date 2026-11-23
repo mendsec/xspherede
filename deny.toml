@@ -1,4 +1,4 @@
-# cargo-deny policy configuration for XSphereDE.
+# cargo-deny policy configuration for Spheradian.
 # Enforces dependency advisories, MIT-compatible licensing, crate bans, and allowed sources.
 
 [graph]
