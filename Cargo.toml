@@ -35,12 +35,24 @@ unwrap_used = "deny"
 
 [dependencies]
 bytemuck = { version = "1.21", features = ["derive"] }
-env_logger = "0.11"
 glam = "0.34"
 log = "0.4"
-pollster = "1.0"
 wgpu = "30.0"
 winit = "0.30"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+pollster = "1.0"
+
+# Browser build of the demo (see `scripts/build-web.sh`): WebGPU with a WebGL2 fallback.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1"
+console_log = "1.0"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Element", "Event", "EventTarget", "HtmlCanvasElement", "Window"] }
+web-time = "1.1"
+wgpu = { version = "30.0", features = ["webgl"] }
 
 # Hardened compilation profiles (inspired by secureblue / GrapheneOS / Hardened Gentoo)
 [profile.dev]

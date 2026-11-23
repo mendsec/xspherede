@@ -98,6 +98,24 @@ jobs:
       # Type-checks the whole dependency graph for the target. No linking and no execution.
       - run: cargo check --locked --target ${{ matrix.target }}
 
+  web:
+    name: Browser build check (wasm32-unknown-unknown)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --target wasm32-unknown-unknown
+          rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: wasm32-unknown-unknown
+      # Lints the browser build of the demo (docs/demo/). Building the published
+      # bundle needs wasm-bindgen-cli; see scripts/build-web.sh.
+      - run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
+
   openbsd:
     name: BSD cross-check (x86_64-unknown-openbsd)
     runs-on: ubuntu-latest

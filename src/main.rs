@@ -26,8 +26,14 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// `std::time::Instant` is unavailable on `wasm32-unknown-unknown`; `web-time` wraps
+// `performance.now()` there and re-exports the std type everywhere else.
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
 use warp::{aim_target, WarpGesture, WarpJump};
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 use wgpu::util::DeviceExt;
 use window3d::{generate_demo_window_rgba, SphericalWindow, WindowVertex};
 use winit::application::ApplicationHandler;
@@ -61,8 +67,12 @@ struct WindowRenderEntry {
 
 /// Non-GPU pointer, keyboard, and window-interaction state carried across renderer rebuilds.
 struct InteractionState {
+    /// Pointer position in render-target pixels, as used for picking.
     cursor_pos: (f32, f32),
-    last_cursor_pos: Option<(f32, f32)>,
+    /// Last pointer position in window pixels. Movement is measured here and only
+    /// then scaled, so a change in the window-to-render scale cannot make a stale
+    /// baseline jump.
+    window_cursor_pos: Option<(f32, f32)>,
     right_mouse_down: bool,
     left_mouse_down: bool,
     middle_mouse_down: bool,
@@ -97,7 +107,7 @@ impl InteractionState {
     fn new(width: u32, height: u32) -> Self {
         Self {
             cursor_pos: (width as f32 * 0.5, height as f32 * 0.5),
-            last_cursor_pos: None,
+            window_cursor_pos: None,
             right_mouse_down: false,
             left_mouse_down: false,
             middle_mouse_down: false,
@@ -112,6 +122,28 @@ impl InteractionState {
             minimap_drag_distance: 0.0,
             warp: WarpGesture::default(),
             overview_press: None,
+        }
+    }
+
+    /// Records a pointer move at `window_pos` (window pixels) and returns the movement
+    /// since the previous one in render-target pixels, using `scale` (render pixels per
+    /// window pixel). Returns `None` for the first move.
+    fn pointer_moved(&mut self, window_pos: (f32, f32), scale: (f32, f32)) -> Option<(f32, f32)> {
+        let delta = self.window_cursor_pos.map(|last| {
+            (
+                (window_pos.0 - last.0) * scale.0,
+                (window_pos.1 - last.1) * scale.1,
+            )
+        });
+        self.window_cursor_pos = Some(window_pos);
+        self.cursor_pos = (window_pos.0 * scale.0, window_pos.1 * scale.1);
+        delta
+    }
+
+    /// Re-projects the cursor into render-target pixels after the scale changed.
+    fn rescale_cursor(&mut self, scale: (f32, f32)) {
+        if let Some(pos) = self.window_cursor_pos {
+            self.cursor_pos = (pos.0 * scale.0, pos.1 * scale.1);
         }
     }
 
@@ -131,6 +163,22 @@ impl InteractionState {
     }
 }
 
+/// Scales `width` x `height` down uniformly so neither side exceeds `max_dim`.
+///
+/// Browser canvases follow the page size times the device pixel ratio, which can
+/// exceed the device's texture limit on large high-DPI screens. Scaling both sides by
+/// the same factor keeps the aspect ratio, so the image is stretched evenly back to
+/// the canvas and pointer positions map back with one factor.
+fn fit_within_texture_limit(width: u32, height: u32, max_dim: u32) -> (u32, u32) {
+    let longest = width.max(height);
+    if longest <= max_dim || max_dim == 0 {
+        return (width, height);
+    }
+    let scale = f64::from(max_dim) / f64::from(longest);
+    let fit = |side: u32| ((f64::from(side) * scale).round() as u32).clamp(1, max_dim);
+    (fit(width), fit(height))
+}
+
 /// Returns `true` when enough time has elapsed since `last_attempt` to retry recovery.
 fn should_attempt_recovery(
     last_attempt: Option<Instant>,
@@ -146,6 +194,9 @@ struct SpheradianRenderer {
     /// `None` only between losing the surface and successfully recreating it.
     surface: Option<wgpu::Surface<'static>>,
     device: wgpu::Device,
+    /// Graphics API in use, shown in the browser build (WebGPU or WebGL2).
+    #[cfg(target_arch = "wasm32")]
+    adapter_backend: wgpu::Backend,
     /// Set by wgpu when the device is lost. Every GPU resource in this renderer is
     /// then invalid and the renderer must be rebuilt (see `SpheradianApp::recover_from_device_loss`).
     device_lost: Arc<AtomicBool>,
@@ -239,6 +290,21 @@ impl SpheradianRenderer {
         texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
+    /// Device limits to request. Native GPUs get the wgpu defaults; the browser build
+    /// asks only for what WebGL2 guarantees, raised to the adapter's texture size so
+    /// full-screen canvases still fit.
+    fn required_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+        #[cfg(target_arch = "wasm32")]
+        {
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = adapter;
+            wgpu::Limits::default()
+        }
+    }
+
     /// Builds the renderer and every GPU resource it owns for `window`.
     ///
     /// Returns an error when the GPU cannot be initialized (no surface, adapter, or
@@ -248,10 +314,16 @@ impl SpheradianRenderer {
         let width = size.width.max(1);
         let height = size.height.max(1);
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance_desc = wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
             ..wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()))
-        });
+        };
+        // In the browser, prefer WebGPU but fall back to WebGL2 when `navigator.gpu`
+        // exists without a usable adapter (common on Linux browsers).
+        #[cfg(target_arch = "wasm32")]
+        let instance = wgpu::util::new_instance_with_webgpu_detection(instance_desc).await;
+        #[cfg(not(target_arch = "wasm32"))]
+        let instance = wgpu::Instance::new(instance_desc);
 
         let surface = instance
             .create_surface(window.clone())
@@ -278,13 +350,18 @@ impl SpheradianRenderer {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Spheradian Device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: Self::required_limits(&adapter),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
             })
             .await
             .map_err(|e| format!("Failed to initialize graphics device: {e}"))?;
+
+        // Size the surface and depth buffer within the device's texture limit from
+        // the start; `resize` applies the same rule later.
+        let (width, height) =
+            fit_within_texture_limit(width, height, device.limits().max_texture_dimension_2d);
 
         let device_lost = Arc::new(AtomicBool::new(false));
         {
@@ -951,6 +1028,8 @@ impl SpheradianRenderer {
             instance,
             surface: Some(surface),
             device,
+            #[cfg(target_arch = "wasm32")]
+            adapter_backend: adapter_info.backend,
             device_lost,
             queue,
             config,
@@ -1039,6 +1118,15 @@ impl SpheradianRenderer {
         self.interaction = previous.interaction;
     }
 
+    /// Shows a one-line status message: the window title natively, or the page's
+    /// status bar in the browser build (so the page title is left alone).
+    fn set_status(&self, msg: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.window.set_title(msg);
+        #[cfg(target_arch = "wasm32")]
+        web::set_status(msg);
+    }
+
     /// Center of the galaxy the viewer is currently in, in universe coordinates.
     fn current_galaxy_center(&self) -> glam::Vec3 {
         self.galaxies
@@ -1082,7 +1170,7 @@ impl SpheradianRenderer {
             self.galaxy_label(destination)
         );
         log::info!("{}", msg);
-        self.window.set_title(&msg);
+        self.set_status(&msg);
         self.interaction.dragging_window = None;
         self.travel_destination = Some(destination);
         self.travel_cargo = None;
@@ -1121,14 +1209,14 @@ impl SpheradianRenderer {
         self.interaction.warp.cancel();
         let msg = "Spheradian [SPACE WARP] — Cancelled";
         log::info!("{}", msg);
-        self.window.set_title(msg);
+        self.set_status(msg);
     }
 
     /// Ends the chord gesture: warps when it was armed and aimed, otherwise cancels it.
     fn release_warp_chord(&mut self) {
         match self.interaction.warp.release() {
             Some(jump) => self.warp(jump),
-            None => self.window.set_title(&self.idle_title()),
+            None => self.set_status(&self.idle_title()),
         }
     }
 
@@ -1168,7 +1256,7 @@ impl SpheradianRenderer {
                 cargo
             ),
         };
-        self.window.set_title(&msg);
+        self.set_status(&msg);
     }
 
     /// Completes a flight: the viewer now lives in `galaxy` and faces its first window.
@@ -1205,7 +1293,7 @@ impl SpheradianRenderer {
             self.galaxy_label(galaxy)
         );
         log::info!("{}", msg);
-        self.window.set_title(&msg);
+        self.set_status(&msg);
     }
 
     /// Moves a window into another galaxy. It keeps its trust domain and its spherical
@@ -1249,7 +1337,7 @@ impl SpheradianRenderer {
         self.camera.fly_to(self.overview.eye());
         self.overview_spotlight = None;
         log::info!("Cosmic Zoom-Out opened");
-        self.window.set_title(&self.overview_title());
+        self.set_status(&self.overview_title());
     }
 
     /// Closes the overview and restores the camera limits used inside the universe.
@@ -1337,7 +1425,7 @@ impl SpheradianRenderer {
         if press.window.is_none() {
             self.overview.orbit(dx, dy);
         } else if press.travel_px >= CLICK_SLOP_PX {
-            self.window.set_title(&self.overview_title());
+            self.set_status(&self.overview_title());
         }
     }
 
@@ -1388,7 +1476,7 @@ impl SpheradianRenderer {
                     );
                 }
             }
-            self.window.set_title(&self.overview_title());
+            self.set_status(&self.overview_title());
         }
     }
 
@@ -1460,16 +1548,31 @@ impl SpheradianRenderer {
     }
 
     fn resize(&mut self, new_size: PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
+        let (width, height) = fit_within_texture_limit(
+            new_size.width,
+            new_size.height,
+            self.device.limits().max_texture_dimension_2d,
+        );
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
             if let Some(surface) = &self.surface {
                 surface.configure(&self.device, &self.config);
             }
-            self.depth_view =
-                Self::create_depth_view(&self.device, new_size.width, new_size.height);
-            self.camera.resize(new_size.width, new_size.height);
+            self.depth_view = Self::create_depth_view(&self.device, width, height);
+            self.camera.resize(width, height);
+            self.interaction.rescale_cursor(self.pointer_scale());
         }
+    }
+
+    /// Render-target pixels per window pixel. Below 1 only when the render target was
+    /// scaled down to fit the device's texture limit.
+    fn pointer_scale(&self) -> (f32, f32) {
+        let inner = self.window.inner_size();
+        (
+            self.config.width as f32 / inner.width.max(1) as f32,
+            self.config.height as f32 / inner.height.max(1) as f32,
+        )
     }
 
     /// Performs 3D raycasting against the windows (at their true radial depths `radius`) using the Mini-Globe ray.
@@ -1537,7 +1640,7 @@ impl SpheradianRenderer {
             self.interaction.hovered_window = hovered_win;
             if let Some(idx) = hovered_win {
                 let win = &self.windows[idx].win;
-                self.window.set_title(&format!(
+                self.set_status(&format!(
                     "Spheradian v{} [Mini-Globe] — [{}] {} (Depth R: {:.1}m — Scroll to adjust depth!)",
                     env!("CARGO_PKG_VERSION"),
                     win.trust_domain.badge_label(),
@@ -1550,7 +1653,7 @@ impl SpheradianRenderer {
                 w,
                 h,
             ) {
-                self.window.set_title(&format!(
+                self.set_status(&format!(
                     "Spheradian v{} [Mini-Globe] — Left Click: Jump to ({:.0}°, {:.0}°) | Right Click or 'G': Expand/Collapse Globe",
                     env!("CARGO_PKG_VERSION"),
                     az.to_degrees(),
@@ -1584,7 +1687,7 @@ impl SpheradianRenderer {
                 if hit != self.interaction.hovered_window || spotlight != self.overview_spotlight {
                     self.interaction.hovered_window = hit;
                     self.overview_spotlight = spotlight;
-                    self.window.set_title(&self.overview_title());
+                    self.set_status(&self.overview_title());
                 }
             } else if self.interaction.hovered_window != hit {
                 self.interaction.hovered_window = hit;
@@ -1593,11 +1696,11 @@ impl SpheradianRenderer {
                 } else if let Some(idx) = self.interaction.hovered_window {
                     let win = &self.windows[idx].win;
                     let net_tag = if win.trust_domain.allows_network() {
-                        "NET-SANDBOXED"
+                        "simulated policy: network allowed"
                     } else {
-                        "AIR-GAPPED"
+                        "simulated policy: no network"
                     };
-                    self.window.set_title(&format!(
+                    self.set_status(&format!(
                         "Spheradian v{} — [{} | {}] {} in {} (Azimuth: {:.1}°, Elevation: {:.1}°, Depth R: {:.1}m)",
                         env!("CARGO_PKG_VERSION"),
                         win.trust_domain.badge_label(),
@@ -1609,7 +1712,7 @@ impl SpheradianRenderer {
                         win.radius
                     ));
                 } else {
-                    self.window.set_title(&self.idle_title());
+                    self.set_status(&self.idle_title());
                 }
             }
         }
@@ -1706,7 +1809,7 @@ impl SpheradianRenderer {
             if let Some(galaxy) = galaxy_at(&self.galaxies, self.camera.position) {
                 if galaxy != self.current_galaxy {
                     self.set_current_galaxy(galaxy);
-                    self.window.set_title(&self.idle_title());
+                    self.set_status(&self.idle_title());
                 }
             }
         }
@@ -1988,15 +2091,127 @@ impl SpheradianRenderer {
     }
 }
 
+/// Outcome of building a renderer, delivered to [`SpheradianApp::integrate_built`].
+type BuildResult = Result<SpheradianRenderer, String>;
+
 #[derive(Default)]
 struct SpheradianApp {
+    window: Option<Arc<Window>>,
     renderer: Option<SpheradianRenderer>,
     /// When the last rebuild after a device loss was attempted, to space out retries.
     last_recovery_attempt: Option<Instant>,
+    /// A finished build waiting to be installed. Native builds complete synchronously.
+    #[cfg(not(target_arch = "wasm32"))]
+    built: Option<BuildResult>,
+    /// Browser builds complete asynchronously and land here; `None` inside means
+    /// the build is still in flight.
+    #[cfg(target_arch = "wasm32")]
+    pending: Option<std::rc::Rc<std::cell::RefCell<Option<BuildResult>>>>,
 }
 
 impl SpheradianApp {
     const RECOVERY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
+    /// Starts building a renderer for `window`. Natively this blocks until the GPU is
+    /// ready; in the browser, where blocking is impossible, the build runs as a task
+    /// and requests a redraw when done.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_build(&mut self, window: Arc<Window>) {
+        self.built = Some(pollster::block_on(SpheradianRenderer::new(window)));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_build(&mut self, window: Arc<Window>) {
+        let slot = std::rc::Rc::new(std::cell::RefCell::new(None));
+        self.pending = Some(slot.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = SpheradianRenderer::new(window.clone()).await;
+            *slot.borrow_mut() = Some(result);
+            window.request_redraw();
+        });
+    }
+
+    /// Returns `true` while a browser build has not finished yet.
+    fn build_in_flight(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.pending
+                .as_ref()
+                .is_some_and(|slot| slot.borrow().is_none())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            false
+        }
+    }
+
+    fn take_built(&mut self) -> Option<BuildResult> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let result = self.pending.as_ref()?.borrow_mut().take()?;
+            self.pending = None;
+            Some(result)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.built.take()
+        }
+    }
+
+    /// Installs a finished build. A rebuild after device loss adopts the previous
+    /// session; a failed rebuild is retried, and a failed first build is fatal.
+    fn integrate_built(&mut self) {
+        let Some(result) = self.take_built() else {
+            return;
+        };
+        match result {
+            Ok(mut rebuilt) => {
+                // A build that finished after the context was lost has unusable resources.
+                #[cfg(target_arch = "wasm32")]
+                if web::webgl_context_lost() {
+                    rebuilt.device_lost.store(true, Ordering::Release);
+                }
+                if let Some(previous) = self.renderer.take() {
+                    rebuilt.adopt_session_state(previous);
+                    rebuilt.resize(rebuilt.window.inner_size());
+                    self.last_recovery_attempt = None;
+                    log::info!("GPU device recovered; renderer rebuilt");
+                } else {
+                    // The browser build waits asynchronously for the GPU; resizes in
+                    // the meantime reached no renderer, so pick up the current size.
+                    rebuilt.resize(rebuilt.window.inner_size());
+                    #[cfg(target_arch = "wasm32")]
+                    rebuilt.set_status(&format!(
+                        "Spheradian v{} running on {}. Click the scene to focus it, then use the controls below.",
+                        env!("CARGO_PKG_VERSION"),
+                        match rebuilt.adapter_backend {
+                            wgpu::Backend::BrowserWebGpu => "WebGPU",
+                            wgpu::Backend::Gl => "WebGL2",
+                            _ => "an unknown graphics API",
+                        }
+                    ));
+                }
+                self.renderer = Some(rebuilt);
+            }
+            Err(e) => match self.renderer.as_mut() {
+                Some(renderer) => {
+                    log::error!("Renderer rebuild after device loss failed, will retry: {e}");
+                    // Input events are ignored while suspended, so releases would be missed:
+                    // drop held keys and buttons instead of carrying them over as stuck.
+                    renderer.interaction.release_held();
+                }
+                None => {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        log::error!("{e}");
+                        web::show_fatal(&e);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    panic!("{e}");
+                }
+            },
+        }
+    }
 
     /// If the GPU device was lost, rebuilds the renderer on a new device and carries
     /// the session over. Returns `true` when the renderer is usable for this frame.
@@ -2005,11 +2220,21 @@ impl SpheradianApp {
     /// lost renderer is kept only for its session state, drawing is suspended, and the
     /// rebuild is retried once per `RECOVERY_RETRY_INTERVAL`.
     fn recover_from_device_loss(&mut self) -> bool {
+        self.integrate_built();
+        let in_flight = self.build_in_flight();
         let Some(renderer) = self.renderer.as_mut() else {
             return false;
         };
         if !renderer.device_lost.load(Ordering::Acquire) {
             return true;
+        }
+        if in_flight {
+            return false;
+        }
+        // A rebuild cannot succeed until the browser gives the WebGL2 context back.
+        #[cfg(target_arch = "wasm32")]
+        if web::webgl_context_lost() {
+            return false;
         }
 
         let now = Instant::now();
@@ -2022,50 +2247,98 @@ impl SpheradianApp {
         }
         self.last_recovery_attempt = Some(now);
 
+        // Input events are ignored until the rebuild lands, so releases would be
+        // missed: drop held keys, buttons, and drags now instead of carrying them over.
+        renderer.interaction.release_held();
         // A window backs only one surface at a time: release the old one first.
         drop(renderer.surface.take());
+        let window = renderer.window.clone();
 
-        match pollster::block_on(SpheradianRenderer::new(renderer.window.clone())) {
-            Ok(mut rebuilt) => {
-                if let Some(previous) = self.renderer.take() {
-                    rebuilt.adopt_session_state(previous);
-                }
-                self.renderer = Some(rebuilt);
-                self.last_recovery_attempt = None;
-                log::info!("GPU device recovered; renderer rebuilt");
-                true
-            }
-            Err(e) => {
-                log::error!("Renderer rebuild after device loss failed, will retry: {e}");
-                // Input events are ignored while suspended, so releases would be missed:
-                // drop held keys and buttons instead of carrying them over as stuck.
-                renderer.interaction.release_held();
-                false
-            }
+        self.start_build(window);
+        self.integrate_built();
+        self.renderer
+            .as_ref()
+            .is_some_and(|renderer| !renderer.device_lost.load(Ordering::Acquire))
+    }
+
+    fn window_attributes() -> winit::window::WindowAttributes {
+        let attrs = Window::default_attributes().with_title(concat!(
+            "Spheradian v",
+            env!("CARGO_PKG_VERSION"),
+            " [Rust + wgpu] — Mini-Globe in bottom-right (Rotate / Click) | Scroll/WASD: Fly through Matrix Code"
+        ));
+        #[cfg(target_arch = "wasm32")]
+        {
+            // Render into the page's canvas, sized by the page's CSS.
+            use winit::platform::web::WindowAttributesExtWebSys;
+            let canvas = web::canvas();
+            let append = canvas.is_none();
+            attrs.with_canvas(canvas).with_append(append)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            attrs.with_inner_size(PhysicalSize::new(1366, 840))
         }
     }
 }
 
+/// Converts a pixel scroll delta into wheel lines.
+///
+/// Natively pixel deltas come from touchpads. In the browser every wheel reports
+/// pixels, about 100 CSS pixels per notch, so the delta is converted from physical to
+/// CSS pixels and scaled to keep one notch close to one native wheel line.
+fn pixel_scroll_to_lines(physical_dy: f64, scale_factor: f64) -> f32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let _ = scale_factor;
+        physical_dy as f32 * 0.04
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        browser_pixels_to_lines(physical_dy, scale_factor)
+    }
+}
+
+/// Converts a browser wheel delta in physical pixels into wheel lines. The scale
+/// factor is the device pixel ratio, which page zoom can push below 1.0; a factor
+/// that is not a positive finite number is treated as 1.0.
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_pixels_to_lines(physical_dy: f64, scale_factor: f64) -> f32 {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    (physical_dy / scale) as f32 * 0.01
+}
+
+/// Quits the application. In the browser there is nothing to quit: the page owns
+/// the canvas, so this is a no-op.
+fn request_exit(event_loop: &ActiveEventLoop) {
+    #[cfg(not(target_arch = "wasm32"))]
+    event_loop.exit();
+    #[cfg(target_arch = "wasm32")]
+    let _ = event_loop;
+}
+
 impl ApplicationHandler for SpheradianApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.renderer.is_none() {
-            let win_attrs = Window::default_attributes()
-                .with_title(concat!(
-                    "Spheradian v",
-                    env!("CARGO_PKG_VERSION"),
-                    " [Rust + wgpu] — Mini-Globe in bottom-right (Rotate / Click) | Scroll/WASD: Fly through Matrix Code"
-                ))
-                .with_inner_size(PhysicalSize::new(1366, 840));
-
+        if self.window.is_none() {
             let window = Arc::new(
                 event_loop
-                    .create_window(win_attrs)
+                    .create_window(Self::window_attributes())
                     .expect("Failed to create Spheradian window"),
             );
-
-            let renderer = pollster::block_on(SpheradianRenderer::new(window))
-                .unwrap_or_else(|e| panic!("{e}"));
-            self.renderer = Some(renderer);
+            self.window = Some(window.clone());
+            #[cfg(target_arch = "wasm32")]
+            {
+                use winit::platform::web::WindowExtWebSys;
+                if let Some(canvas) = window.canvas() {
+                    web::watch_webgl_context(&canvas);
+                }
+            }
+            self.start_build(window);
+            self.integrate_built();
         }
     }
 
@@ -2075,6 +2348,16 @@ impl ApplicationHandler for SpheradianApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        self.integrate_built();
+
+        // A lost WebGL2 context invalidates the device just like a lost GPU device.
+        #[cfg(target_arch = "wasm32")]
+        if let Some(renderer) = self.renderer.as_ref() {
+            if web::take_webgl_context_loss() {
+                renderer.device_lost.store(true, Ordering::Release);
+            }
+        }
+
         // Every GPU resource is invalid once the device is lost, so nothing may touch
         // the renderer until it has been rebuilt. Recovery runs on the next redraw.
         let device_lost = self
@@ -2084,7 +2367,7 @@ impl ApplicationHandler for SpheradianApp {
         if device_lost {
             match event {
                 WindowEvent::CloseRequested => {
-                    event_loop.exit();
+                    request_exit(event_loop);
                     return;
                 }
                 WindowEvent::RedrawRequested => {
@@ -2105,7 +2388,7 @@ impl ApplicationHandler for SpheradianApp {
         };
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => request_exit(event_loop),
             WindowEvent::Resized(size) => renderer.resize(size),
             // Button releases are not delivered while unfocused: a chord that loses focus
             // is cancelled so it can never fire later by surprise.
@@ -2131,7 +2414,7 @@ impl ApplicationHandler for SpheradianApp {
                                     } else if renderer.minimap.expanded {
                                         renderer.minimap.expanded = false;
                                     } else {
-                                        event_loop.exit();
+                                        request_exit(event_loop);
                                     }
                                 }
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + C (Copy to Vault)
@@ -2156,7 +2439,7 @@ impl ApplicationHandler for SpheradianApp {
                                             win.title
                                         );
                                         log::info!("{}", msg);
-                                        renderer.window.set_title(&msg);
+                                        renderer.set_status(&msg);
                                     }
                                 }
                                 // Qubes OS Secure Inter-Domain Clipboard: Ctrl + Shift + V (Paste & Auto-Wipe)
@@ -2183,7 +2466,7 @@ impl ApplicationHandler for SpheradianApp {
                                                     dest_win.title
                                                 );
                                                 log::info!("{}", msg);
-                                                renderer.window.set_title(&msg);
+                                                renderer.set_status(&msg);
                                             }
                                             Err(violation) => {
                                                 let msg = format!(
@@ -2191,7 +2474,7 @@ impl ApplicationHandler for SpheradianApp {
                                                     violation
                                                 );
                                                 log::warn!("{}", msg);
-                                                renderer.window.set_title(&msg);
+                                                renderer.set_status(&msg);
                                             }
                                         }
                                     }
@@ -2202,13 +2485,13 @@ impl ApplicationHandler for SpheradianApp {
                                     if renderer.lockdown_active {
                                         renderer.clipboard_vault.wipe();
                                         renderer.interaction.dragging_window = None;
-                                        let msg = "Spheradian [LOCKDOWN ACTIVE] — All 3D window surfaces encrypted/blanked & Clipboard wiped (Press 'L' to unlock)";
+                                        let msg = "Spheradian [LOCKDOWN ACTIVE] — All 3D window surfaces blanked & Clipboard vault wiped (Press 'L' to unlock)";
                                         log::warn!("{}", msg);
-                                        renderer.window.set_title(msg);
+                                        renderer.set_status(msg);
                                     } else {
                                         let msg = "Spheradian [LOCKDOWN LIFTED] — Trusted 3D workspace restored";
                                         log::info!("{}", msg);
-                                        renderer.window.set_title(msg);
+                                        renderer.set_status(msg);
                                     }
                                 }
                                 // Runtime Security Audit Report ('F12')
@@ -2219,7 +2502,7 @@ impl ApplicationHandler for SpheradianApp {
                                     );
                                     let summary = report.summary_line();
                                     log::info!("[SECURITY AUDIT] {}", summary);
-                                    renderer.window.set_title(&format!(
+                                    renderer.set_status(&format!(
                                         "Spheradian [SECURITY AUDIT] — {}",
                                         summary
                                     ));
@@ -2361,11 +2644,11 @@ impl ApplicationHandler for SpheradianApp {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let new_pos = (position.x as f32, position.y as f32);
-                if let Some(last) = renderer.interaction.last_cursor_pos {
-                    let dx = new_pos.0 - last.0;
-                    let dy = new_pos.1 - last.1;
-
+                // Pointer positions arrive in window pixels; the render target may be
+                // scaled down to fit the texture limit, so map them into its pixels.
+                let scale = renderer.pointer_scale();
+                let window_pos = (position.x as f32, position.y as f32);
+                if let Some((dx, dy)) = renderer.interaction.pointer_moved(window_pos, scale) {
                     renderer.interaction.warp.add_drag(dx, dy);
 
                     if renderer.overview.is_active() {
@@ -2390,13 +2673,13 @@ impl ApplicationHandler for SpheradianApp {
                         renderer.camera.rotate(dx, dy, 0.0038);
                     }
                 }
-                renderer.interaction.cursor_pos = new_pos;
-                renderer.interaction.last_cursor_pos = Some(new_pos);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll_y = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(pos) => (pos.y as f32) * 0.04,
+                    MouseScrollDelta::PixelDelta(pos) => {
+                        pixel_scroll_to_lines(pos.y, renderer.window.scale_factor())
+                    }
                 };
 
                 let (px, py) = renderer.interaction.cursor_pos;
@@ -2445,6 +2728,7 @@ impl ApplicationHandler for SpheradianApp {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        self.integrate_built();
         if let Some(renderer) = &self.renderer {
             renderer.window.request_redraw();
         }
@@ -2468,6 +2752,7 @@ fn galaxy_hotkey_index(code: KeyCode) -> Option<GalaxyId> {
     Some(index)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     log::info!(
@@ -2484,6 +2769,105 @@ fn main() {
         .expect("Error while running Spheradian");
 }
 
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    use winit::platform::web::EventLoopExtWebSys;
+
+    console_error_panic_hook::set_once();
+    let _ = console_log::init_with_level(log::Level::Info);
+    log::info!(
+        "Starting Spheradian v{} in the browser (WebAssembly)...",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let event_loop = EventLoop::new().expect("Failed to create EventLoop");
+    // The redraw loop keeps itself running through `request_redraw`, which the
+    // browser paces with `requestAnimationFrame`; polling would only spin the CPU.
+    event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.spawn_app(SpheradianApp::default());
+}
+
+/// Page integration for the browser build: the canvas to render into and the
+/// status line that stands in for the native window title.
+#[cfg(target_arch = "wasm32")]
+mod web {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use wasm_bindgen::closure::Closure;
+    use wasm_bindgen::JsCast;
+
+    /// The WebGL2 context is lost and has not been restored yet.
+    static WEBGL_CONTEXT_LOST: AtomicBool = AtomicBool::new(false);
+    /// A context loss happened that the app has not handled yet.
+    static WEBGL_LOSS_UNHANDLED: AtomicBool = AtomicBool::new(false);
+
+    /// Lets the browser restore a lost WebGL2 context and records the loss, so the
+    /// app can rebuild the renderer once the context is back. WebGPU reports device
+    /// loss through wgpu instead, and its canvas never fires these events.
+    pub fn watch_webgl_context(canvas: &web_sys::HtmlCanvasElement) {
+        let lost = Closure::<dyn FnMut(web_sys::Event)>::new(|event: web_sys::Event| {
+            // Without this the browser never restores the context.
+            event.prevent_default();
+            WEBGL_CONTEXT_LOST.store(true, Ordering::Release);
+            WEBGL_LOSS_UNHANDLED.store(true, Ordering::Release);
+            log::warn!("WebGL2 context lost; waiting for the browser to restore it");
+        });
+        let restored = Closure::<dyn FnMut(web_sys::Event)>::new(|_: web_sys::Event| {
+            WEBGL_CONTEXT_LOST.store(false, Ordering::Release);
+            log::info!("WebGL2 context restored; rebuilding the renderer");
+        });
+        for (name, handler) in [
+            ("webglcontextlost", lost),
+            ("webglcontextrestored", restored),
+        ] {
+            if canvas
+                .add_event_listener_with_callback(name, handler.as_ref().unchecked_ref())
+                .is_err()
+            {
+                log::warn!("Could not listen for {name} events");
+            }
+            // The listeners live as long as the page.
+            handler.forget();
+        }
+    }
+
+    /// Whether the WebGL2 context is currently lost.
+    pub fn webgl_context_lost() -> bool {
+        WEBGL_CONTEXT_LOST.load(Ordering::Acquire)
+    }
+
+    /// Returns `true` once per context loss, so the app can mark its device lost.
+    pub fn take_webgl_context_loss() -> bool {
+        WEBGL_LOSS_UNHANDLED.swap(false, Ordering::AcqRel)
+    }
+
+    const CANVAS_ID: &str = "spheradian-canvas";
+    const STATUS_ID: &str = "spheradian-status";
+
+    fn document() -> Option<web_sys::Document> {
+        web_sys::window()?.document()
+    }
+
+    pub fn canvas() -> Option<web_sys::HtmlCanvasElement> {
+        document()?
+            .get_element_by_id(CANVAS_ID)?
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .ok()
+    }
+
+    pub fn set_status(msg: &str) {
+        if let Some(el) = document().and_then(|doc| doc.get_element_by_id(STATUS_ID)) {
+            el.set_text_content(Some(msg));
+        }
+    }
+
+    pub fn show_fatal(msg: &str) {
+        set_status(&format!("Spheradian could not start: {msg}"));
+        if let Some(el) = document().and_then(|doc| doc.get_element_by_id(STATUS_ID)) {
+            let _ = el.set_attribute("data-state", "error");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2495,6 +2879,51 @@ mod tests {
         assert_eq!(galaxy_hotkey_index(KeyCode::Digit9), Some(8));
         assert_eq!(galaxy_hotkey_index(KeyCode::Digit0), None);
         assert_eq!(galaxy_hotkey_index(KeyCode::KeyG), None);
+    }
+
+    #[test]
+    fn test_browser_wheel_lines_follow_fractional_scale() {
+        // One notch is about 100 CSS pixels at any page zoom.
+        let line = |physical: f64, scale: f64| browser_pixels_to_lines(physical, scale);
+        assert!((line(100.0, 1.0) - 1.0).abs() < 1e-6);
+        assert!((line(50.0, 0.5) - 1.0).abs() < 1e-6);
+        assert!((line(200.0, 2.0) - 1.0).abs() < 1e-6);
+        // Invalid factors fall back to treating the delta as CSS pixels.
+        assert!((line(100.0, 0.0) - 1.0).abs() < 1e-6);
+        assert!((line(100.0, f64::NAN) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_pointer_delta_stays_small_when_render_scale_changes() {
+        let mut state = InteractionState::new(4096, 2048);
+
+        // A 5000-pixel window rendered at the 4096-pixel texture limit.
+        let clamped = (4096.0 / 5000.0, 4096.0 / 5000.0);
+        assert_eq!(state.pointer_moved((2500.0, 100.0), clamped), None);
+        assert_eq!(state.cursor_pos, (2048.0, 81.92));
+
+        // The window shrinks below the limit, so the render scale becomes 1.
+        state.rescale_cursor((1.0, 1.0));
+        assert_eq!(state.cursor_pos, (2500.0, 100.0));
+
+        // One window pixel of movement stays one pixel, not a jump of ~450.
+        let (dx, dy) = state
+            .pointer_moved((2501.0, 100.0), (1.0, 1.0))
+            .expect("second move has a delta");
+        assert!(
+            (dx - 1.0).abs() < 1e-3 && dy.abs() < 1e-3,
+            "delta was ({dx}, {dy})"
+        );
+        assert_eq!(state.cursor_pos, (2501.0, 100.0));
+    }
+
+    #[test]
+    fn test_fit_within_texture_limit_scales_uniformly() {
+        assert_eq!(fit_within_texture_limit(1920, 1080, 8192), (1920, 1080));
+        assert_eq!(fit_within_texture_limit(8192, 2000, 8192), (8192, 2000));
+        assert_eq!(fit_within_texture_limit(10000, 3000, 8192), (8192, 2458));
+        assert_eq!(fit_within_texture_limit(3000, 16384, 8192), (1500, 8192));
+        assert_eq!(fit_within_texture_limit(100_000, 1, 2048), (2048, 1));
     }
 
     #[test]
@@ -2522,7 +2951,7 @@ mod tests {
     fn test_release_held_inputs_clears_held_state_and_preserves_session_toggles() {
         let mut state = InteractionState {
             cursor_pos: (320.0, 240.0),
-            last_cursor_pos: Some((310.0, 235.0)),
+            window_cursor_pos: Some((310.0, 235.0)),
             right_mouse_down: true,
             left_mouse_down: true,
             middle_mouse_down: true,

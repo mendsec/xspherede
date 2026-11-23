@@ -136,6 +136,19 @@ To see the security audit and policy messages, raise the log level:
 RUST_LOG=info cargo run --release --locked
 ```
 
+### Browser demo
+
+The same code also builds for the browser, where it runs on WebGPU with a WebGL2 fallback. A prebuilt copy is live at **[spheradian.github.io/spheradian/demo](https://spheradian.github.io/spheradian/demo/)**. To rebuild it into `docs/demo/pkg/`:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --locked --version 0.2.130   # must match wasm-bindgen in Cargo.lock
+./scripts/build-web.sh
+python3 -m http.server -d docs 8000                          # then open http://localhost:8000/demo/
+```
+
+In the browser the host security audit reports `n/a`, since a page cannot read kernel settings, and `Esc` does not quit.
+
 ### Test
 
 ```bash
@@ -200,7 +213,9 @@ Spheradian type-checks for OpenBSD in CI but has not been run there yet, so thes
 spheradian/
 ├── Cargo.toml          # Manifest and hardened build profiles
 ├── Cargo.lock          # Pinned dependency graph
-├── docs/               # Screenshots and media
+├── docs/               # Project page, screenshots, and the browser demo (docs/demo/)
+├── scripts/
+│   └── build-web.sh    # Builds the WebAssembly demo into docs/demo/pkg/
 └── src/
     ├── main.rs         # wgpu / winit setup, event loop, render pipelines, lockdown mode
     ├── camera.rs       # SphereCamera: damped spatial camera and NDC raycasting

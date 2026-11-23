@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spheradian Demo</title>
+<meta name="description" content="The Spheradian v0.0.1 prototype compiled to WebAssembly: the same Rust and wgpu code as the native app, running in your browser with WebGPU or WebGL2.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #02060f;
+    --panel: #06101e;
+    --line: #15304f;
+    --text: #d6e4f5;
+    --muted: #7d97b4;
+    --accent: #8fb6ff;
+    --amber: #ffa53a;
+    --danger: #ff6b6b;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; color: var(--text); font: 16px/1.6 Inter, system-ui, sans-serif; background: var(--bg); }
+  a { color: var(--accent); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 16px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 16px; padding: 16px 0 12px; }
+  .bar h1 { margin: 0; font: 600 13px var(--mono); letter-spacing: .3em; color: var(--accent); }
+  .bar nav { display: flex; gap: 16px; font: 500 13px var(--mono); }
+  .stage { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #010402; }
+  #spheradian-canvas { display: block; width: 100%; height: min(78vh, 860px); min-height: 360px; outline: none; touch-action: pan-y pinch-zoom; }
+  /* An outline is drawn above the canvas bitmap; an inset box-shadow would sit beneath it. */
+  #spheradian-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  #spheradian-status { margin: 0; padding: 8px 12px; min-height: 2.6em; border-top: 1px solid var(--line); background: var(--panel);
+    font: 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  #spheradian-status[data-state="error"] { color: var(--danger); }
+  .note { font-size: 14px; color: var(--muted); margin: 14px 0 0; }
+  h2 { font: 600 12px var(--mono); letter-spacing: .3em; color: var(--accent); margin: 36px 0 12px; text-transform: uppercase; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font: 600 11px var(--mono); letter-spacing: .12em; color: var(--muted); text-transform: uppercase; }
+  td:first-child { color: var(--muted); }
+  kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--text); white-space: nowrap; }
+  footer { margin: 48px 0 32px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bar">
+    <h1>SPHERADIAN · LIVE DEMO</h1>
+    <nav>
+      <a href="../">Project page</a>
+      <a href="https://github.com/spheradian/spheradian">Source</a>
+    </nav>
+  </div>
+
+  <div class="stage">
+    <canvas id="spheradian-canvas" tabindex="0" aria-label="Spheradian 3D scene. Click to focus, then use the mouse and keyboard controls listed below."></canvas>
+    <p id="spheradian-status" role="status" aria-live="polite">Loading WebAssembly…</p>
+  </div>
+  <p class="note">This is the v0.0.1 prototype itself, compiled from the same Rust and <code>wgpu</code> code to WebAssembly. At startup it uses WebGPU if your browser provides a working WebGPU adapter, and WebGL2 otherwise. It needs a mouse and keyboard. The host security audit (<kbd>F12</kbd>) shows <code>n/a</code> here, because a browser page cannot read kernel settings.</p>
+
+  <h2>Controls</h2>
+  <table>
+    <thead><tr><th>Action</th><th>Control</th></tr></thead>
+    <tbody>
+      <tr><td>Rotate the view</td><td>Drag with the right mouse button, or the left button on the background</td></tr>
+      <tr><td>Toggle continuous free-look</td><td><kbd>Space</kbd> or <kbd>Tab</kbd></td></tr>
+      <tr><td>Fly through the sphere</td><td>Mouse wheel on empty space, or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> (<kbd>Q</kbd> / <kbd>E</kbd> for down / up, <kbd>Shift</kbd> to boost)</td></tr>
+      <tr><td>Move a window across the sphere</td><td>Drag it with the left mouse button</td></tr>
+      <tr><td>Change a window's depth</td><td>Hover the window (main view or Mini-Globe) and scroll</td></tr>
+      <tr><td>Rotate the Mini-Globe</td><td>Drag it, or scroll over its empty space</td></tr>
+      <tr><td>Jump to a point or window</td><td>Left click inside the Mini-Globe</td></tr>
+      <tr><td>Expand or collapse the Mini-Globe</td><td>Right or middle click on it, or <kbd>G</kbd></td></tr>
+      <tr><td>Copy focused window into the clipboard vault</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>C</kbd></td></tr>
+      <tr><td>Paste from the clipboard vault</td><td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>V</kbd></td></tr>
+      <tr><td>Toggle lockdown mode</td><td><kbd>L</kbd></td></tr>
+      <tr><td>Run the security audit</td><td><kbd>F12</kbd></td></tr>
+      <tr><td>Recenter at the sphere core</td><td><kbd>R</kbd> or <kbd>Home</kbd></td></tr>
+      <tr><td>Toggle code rain speed</td><td><kbd>M</kbd></td></tr>
+      <tr><td>Toggle fullscreen</td><td><kbd>F11</kbd> or <kbd>F</kbd></td></tr>
+      <tr><td>Collapse the Mini-Globe</td><td><kbd>Esc</kbd></td></tr>
+    </tbody>
+  </table>
+
+  <footer>MIT licensed · Built with <code>scripts/build-web.sh</code> from <a href="https://github.com/spheradian/spheradian">spheradian/spheradian</a></footer>
+</div>
+<script type="module">
+  const canvas = document.getElementById("spheradian-canvas");
+  const status = document.getElementById("spheradian-status");
+
+  // Keyboard controls go to the canvas, so give it focus on any click.
+  canvas.addEventListener("pointerdown", () => canvas.focus());
+
+  // The scene has no touch controls. winit cancels `touchstart` on the canvas, which
+  // would stop a swipe from scrolling the page, so keep that event from reaching it.
+  canvas.parentElement.addEventListener("touchstart", (event) => {
+    if (event.target === canvas) event.stopPropagation();
+  }, { capture: true, passive: true });
+
+  function fail(message) {
+    status.textContent = message;
+    status.dataset.state = "error";
+  }
+
+  if (!("gpu" in navigator) && !document.createElement("canvas").getContext("webgl2")) {
+    fail("Your browser supports neither WebGPU nor WebGL2, which this demo needs.");
+  } else {
+    status.textContent = "Starting the GPU renderer…";
+    try {
+      // Imported here so a failed module load is reported like a failed start.
+      const { default: init } = await import("./pkg/spheradian.js");
+      await init();
+    } catch (err) {
+      console.error(err);
+      fail(`Spheradian could not start: ${err}`);
+    }
+  }
+</script>
+</body>
+</html>
