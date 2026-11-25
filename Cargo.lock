@@ -1416,9 +1416,9 @@ dependencies = [
 
 [[package]]
 name = "pollster"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
+checksum = "3c2c80c4e3afbec8224b9d3e641fbf3a5690cc7595b887b0a27a926bb357ed5c"
 
 [[package]]
 name = "portable-atomic"
@@ -1773,6 +1773,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "spheradian"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "console_error_panic_hook",
+ "console_log",
+ "env_logger",
+ "glam",
+ "log",
+ "pollster",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+ "wgpu",
+ "winit",
 ]
 
 [[package]]
@@ -2708,25 +2727,6 @@ name = "xml-rs"
 version = "0.8.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
-
-[[package]]
-name = "spheradian"
-version = "0.0.1"
-dependencies = [
- "bytemuck",
- "console_error_panic_hook",
- "console_log",
- "env_logger",
- "glam",
- "log",
- "pollster",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
- "wgpu",
- "winit",
-]
 
 [[package]]
 name = "zerocopy"
