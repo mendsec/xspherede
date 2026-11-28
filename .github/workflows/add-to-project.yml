@@ -1,0 +1,22 @@
+name: Add to project
+
+# Adds new issues and pull requests to the Spheradian Roadmap project.
+# pull_request_target is used so the project token is available for PRs from
+# forks and Dependabot. This workflow never checks out or runs PR code.
+on:
+  issues:
+    types: [opened, reopened, transferred]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] no checkout, no PR code executed
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  add-to-project:
+    name: Add to Spheradian Roadmap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/add-to-project@f2c1f1fa649a891be84948ea89b5dfba1526ef05 # v2.0.1
+        with:
+          project-url: https://github.com/orgs/spheradian/projects/1
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT }}
